@@ -1,0 +1,22 @@
+{
+  "name": "liquidshield-ptb",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "PTB builders and deploy scripts for LiquidShield Guardian",
+  "scripts": {
+    "build": "tsc",
+    "deploy": "tsx src/deploy.ts",
+    "rescue": "tsx src/scallop_rescue.ts",
+    "onboard": "tsx src/onboard_user.ts"
+  },
+  "dependencies": {
+    "@mysten/sui": "^1.0.0",
+    "@scallop-io/sui-scallop-sdk": "^2.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
