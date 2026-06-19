@@ -1,0 +1,17 @@
+# Dependencies
+ptb/node_modules/
+
+# Build artifacts
+contracts/build/
+
+# Private keys and env files with secrets
+ptb/.env
+*.key
+*.keystore
+
+# Claude session files
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
