@@ -1,34 +1,25 @@
 /**
  * Shared types and constants for LiquidShield PTB scripts.
  */
-// ─── LiquidShield deployment (testnet 2026-06-20) ────────────────────────────
+// ─── LiquidShield deployment ─────────────────────────────────────────────────
 export const PACKAGE_ID = process.env.LIQUIDSHIELD_PACKAGE_ID ??
-    "0x1a4bc48f7c7cff2bcada2189e3b9c9686c866579629d06af99278370e41f0ecf";
+    "0xabc270e8e2a87c3b4f3abf2f13230680f06768e91e4df41b02f49badca4f2bb0";
 export const SHIELD_REGISTRY_ID = process.env.SHIELD_REGISTRY_ID ??
-    "0x0c002ee24b4beb2ce954c9113f12fec6b3549ac8e12739a501a863473a849b8b";
+    "0xa3ba15ab872301aa2123450f412f0b103b4a41bd8c6f4bbccfa72f40ad614a16";
 // Per-user objects (set in env after onboard_user.ts)
 export const DEFAULT_RISK_POLICY_ID = process.env.RISK_POLICY_ID ?? "0x0";
 export const DEFAULT_VAULT_ID = process.env.VAULT_ID ?? "0x0";
 export const DEFAULT_SNAPSHOT_ID = process.env.SNAPSHOT_ID ?? "0x0";
-export const DEFAULT_POSITION_ID = process.env.POSITION_ID ?? "0x0";
-export const GUARDIAN_CAP_ID = process.env.GUARDIAN_CAP_ID ?? "0x0";
+export const DEFAULT_GUARDIAN_DELEGATION_ID = process.env.GUARDIAN_DELEGATION_ID ?? "0x0";
 // Sui system objects
 export const SUI_CLOCK_ID = "0x6";
 // ─── Scallop testnet contract addresses ──────────────────────────────────────
-// Source: @scallop-io/sui-scallop-sdk src/constants/testAddress.ts
-/** Scallop core protocol package */
 export const SCALLOP_PACKAGE_ID = process.env.SCALLOP_PACKAGE_ID ??
-    "0xd971609b7feb6230585831e7aeb3c121fb21b9431337a30fc99185eb459a05ee";
-/** Version shared object (required by every Scallop call) */
+    "0xf03ed2d85004fef0dca83b226532f4b720f25f929944f8b594a20cd5b8ad540b";
 export const SCALLOP_VERSION_ID = process.env.SCALLOP_VERSION_ID ??
-    "0x72bc09c4ce413d76d07f6e712413aebbe3ce3747eadfbc2331fbdb1dbde2d43a";
-/** Market shared object */
+    "0x4666c444257abae5a08643b54b81ff26567aff1cf8a8cc4a693136b8ebe2277d";
 export const SCALLOP_MARKET_ID = process.env.SCALLOP_MARKET_ID ??
-    "0xed80ed898df1e0b7a14b78c92527b47ef88591d5722ded16050d7e101687bb20";
-/** Coin decimals registry (required by borrow/withdraw calls) */
-export const SCALLOP_COIN_DECIMALS_REGISTRY_ID = "0x200abe9bf19751cc566ae35aa58e2b7e4ff688fc1130f8d8909ea09bc137d668";
-/** xOracle (required by borrow/withdraw calls) */
-export const SCALLOP_XORACLE_ID = "0xb112727f380857fd711f89b450a3b22dc4cc55f82b2212b001f2461d6257b0b9";
+    "0x782d7b6a53b318a9a4bb719a55036b4f05d85e65ed7c79a3798c8e0877e7fa7f";
 // ─── Coin type strings ───────────────────────────────────────────────────────
 export const SUI_TYPE = "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI";
 export const USDC_TYPE = "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC";
