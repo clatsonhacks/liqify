@@ -52,12 +52,20 @@ export class RiskAgent {
     this.lastTickSummary = null;
     this.ptb = null; // lazily-imported { executeRescue, types }
 
-    // executeRescue reads AGENT_PRIVATE_KEY from process.env — surface it from config.
-    if (lsConfig.agentPrivateKey && !process.env.AGENT_PRIVATE_KEY) {
-      process.env.AGENT_PRIVATE_KEY = lsConfig.agentPrivateKey;
-    }
-    if (lsConfig.suiRpcUrl && !process.env.SUI_RPC_URL) {
-      process.env.SUI_RPC_URL = lsConfig.suiRpcUrl;
+    // ptb/dist/{types,scallop_rescue} read these from process.env at import time, falling
+    // back to TESTNET defaults. The backend loads .env into config (not process.env), so we
+    // must bridge them here BEFORE loadPtb() — otherwise mainnet would use testnet IDs.
+    const ptbEnv = {
+      AGENT_PRIVATE_KEY: lsConfig.agentPrivateKey,
+      SUI_RPC_URL: lsConfig.suiRpcUrl,
+      LIQUIDSHIELD_PACKAGE_ID: lsConfig.packageId,
+      SHIELD_REGISTRY_ID: lsConfig.shieldRegistryId,
+      SCALLOP_PACKAGE_ID: lsConfig.scallopPackageId,
+      SCALLOP_VERSION_ID: lsConfig.scallopVersionId,
+      SCALLOP_MARKET_ID: lsConfig.scallopMarketId,
+    };
+    for (const [k, v] of Object.entries(ptbEnv)) {
+      if (v && !process.env[k]) process.env[k] = v;
     }
   }
 
