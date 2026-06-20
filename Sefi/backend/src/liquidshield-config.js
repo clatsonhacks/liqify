@@ -105,6 +105,9 @@ export function createLiquifiConfig(runtimeEnv = process.env) {
     agentTickMs: parsePositiveInt(env.SEFI_AGENT_TICK_MS, 20000, 2000, 600000),
     triggerScore: parsePositiveInt(env.LIQUIDSHIELD_TRIGGER_SCORE, 85, 1, 100),
     maxSnapshotAgeMs: parsePositiveInt(env.MAX_SNAPSHOT_AGE_MS, 120000, 1000, 3600000),
+    minHealthFactor: Number(str(env.MIN_HEALTH_FACTOR, '1.2')) || 1.2,
+    rescueAmount: str(env.RESCUE_AMOUNT, '10000000'), // base units; bigint at use site
+    autoExecute: str(env.LIQUIDSHIELD_AUTO_EXECUTE, 'true') !== 'false',
     indexPollMs: parsePositiveInt(env.SEFI_LISTEN_DELAY_MS, 5000, 1000, 300000),
 
     // ── AI explanation (OpenAI gpt-5; reuses SeFi keys) ─────────────────────────
