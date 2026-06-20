@@ -83,8 +83,7 @@ export function createLiquifiConfig(runtimeEnv = process.env) {
     riskPolicyId: str(env.RISK_POLICY_ID),
     vaultId: str(env.VAULT_ID),
     snapshotId: str(env.SNAPSHOT_ID),
-    positionId: str(env.POSITION_ID),
-    guardianCapId: str(env.GUARDIAN_CAP_ID),
+    guardianDelegationId: str(env.GUARDIAN_DELEGATION_ID),
     obligationId: str(env.OBLIGATION_ID),
     protocol: str(env.PROTOCOL, 'scallop'),
     collateralAsset: str(env.COLLATERAL_ASSET, 'SUI'),
@@ -134,11 +133,11 @@ export function liquifiReadiness(cfg) {
   const missing = [];
   const required = {
     LIQUIDSHIELD_PACKAGE_ID: cfg.packageId,
+    SHIELD_REGISTRY_ID: cfg.shieldRegistryId,
     RISK_POLICY_ID: cfg.riskPolicyId,
     VAULT_ID: cfg.vaultId,
     SNAPSHOT_ID: cfg.snapshotId,
-    POSITION_ID: cfg.positionId,
-    GUARDIAN_CAP_ID: cfg.guardianCapId,
+    GUARDIAN_DELEGATION_ID: cfg.guardianDelegationId,
     OBLIGATION_ID: cfg.obligationId,
     AGENT_PRIVATE_KEY: cfg.agentPrivateKey,
   };
