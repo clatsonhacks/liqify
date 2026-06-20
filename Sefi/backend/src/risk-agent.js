@@ -127,9 +127,14 @@ export class RiskAgent {
       return { ok: false, reason: `stale oracle (${oracleAge}ms > ${this.lsConfig.maxSnapshotAgeMs}ms)` };
     }
     try {
-      const src = this.suiIndexer?.getStatus?.().sources?.find((s) => s.key === 'liquidshield');
-      if (src && Number.isFinite(src.lag_ms) && src.lag_ms > this.lsConfig.indexerLagBudgetMs) {
-        return { ok: false, reason: `indexer lag (${src.lag_ms}ms > ${this.lsConfig.indexerLagBudgetMs}ms)` };
+      // Indexer health = poll recency (is it keeping up), NOT time-since-last-event
+      // (a low-activity package legitimately has no recent events).
+      const st = this.suiIndexer?.getStatus?.();
+      if (st?.last_poll_at) {
+        const pollLag = Date.now() - new Date(st.last_poll_at).getTime();
+        if (pollLag > this.lsConfig.indexerLagBudgetMs) {
+          return { ok: false, reason: `indexer stalled (last poll ${pollLag}ms ago > ${this.lsConfig.indexerLagBudgetMs}ms)` };
+        }
       }
     } catch { /* indexer status optional */ }
     return { ok: true };

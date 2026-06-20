@@ -120,13 +120,16 @@ export function registerLiquidShieldRoutes(app, ctx) {
          UNION ALL SELECT MAX(timestamp) FROM scallop_collateral_deposit_events)`
     )?.m ?? null;
     const failedPtbRate = actions?.total ? Number((actions.bad / actions.total).toFixed(3)) : 0;
-    const indexerLagMs = lsSrc?.lag_ms ?? null;
+    // indexer health = poll recency (keeping up), not time-since-last-event
+    const indexerLagMs = idx.last_poll_at ? Date.now() - new Date(idx.last_poll_at).getTime() : null;
+    const lastLsEventAt = lsSrc?.last_event_at ?? null; // separate metric (informational)
     const oracleAgeMs = market?.oracle_age_ms ?? null;
 
     res.json({
       ok: agent.running && idx.running,
-      indexer_lag_ms: indexerLagMs,
+      indexer_lag_ms: indexerLagMs, // ms since last poll (indexer keeping up?)
       indexer_lag_unsafe: Number.isFinite(indexerLagMs) && indexerLagMs > lsConfig.indexerLagBudgetMs,
+      last_liquidshield_event_at: lastLsEventAt,
       oracle_age_ms: oracleAgeMs,
       oracle_stale: Number.isFinite(oracleAgeMs) && oracleAgeMs > lsConfig.maxSnapshotAgeMs,
       deepbook_ok: market?.liquidity_score != null,
