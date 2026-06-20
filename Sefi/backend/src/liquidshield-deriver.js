@@ -15,8 +15,6 @@ import { ensureAllTables, upsertRows, TABLE_SHAPES } from './liquidshield-tables
 import { decodeByteVector } from './sui-events.js';
 import { buildMarketSnapshot } from './market-data.js';
 
-const LS = '0x1a4bc48f7c7cff2bcada2189e3b9c9686c866579629d06af99278370e41f0ecf';
-
 function parseJsonSafe(s) {
   try {
     return JSON.parse(s);

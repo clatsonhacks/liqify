@@ -18,6 +18,7 @@ import {
   resolveRuntimeParams,
   validateEndpointDefinition,
 } from './custom-api.js';
+import { bootstrapLiquifi, registerLiquidShieldRoutes } from './liquidshield-api.js';
 
 function log(level, event, payload = {}) {
   const entry = {
@@ -2543,6 +2544,20 @@ async function main() {
       });
     });
   }, 2500);
+
+  // ── liquifi (Sui plane): bootstrap indexer + agent, mount /api/* routes ──
+  let liquifiCtx = null;
+  try {
+    liquifiCtx = await bootstrapLiquifi({
+      database,
+      realtimeHub,
+      logger: (level, event, payload) => log(level, `liquifi_${event}`, payload || {}),
+    });
+    registerLiquidShieldRoutes(app, liquifiCtx);
+    log('info', 'liquifi_routes_mounted', {});
+  } catch (error) {
+    log('error', 'liquifi_bootstrap_failed', { error: error instanceof Error ? error.message : String(error) });
+  }
 
   const server = app.listen(config.port, config.host, () => {
     log('info', 'server_started', {
