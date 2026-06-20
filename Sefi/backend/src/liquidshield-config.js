@@ -117,6 +117,10 @@ export function createLiquifiConfig(runtimeEnv = process.env) {
     rescueAmount: str(env.RESCUE_AMOUNT, '10000000'), // base units; bigint at use site
     autoExecute: str(env.LIQUIDSHIELD_AUTO_EXECUTE, 'true') !== 'false',
     indexPollMs: parsePositiveInt(env.SEFI_LISTEN_DELAY_MS, 5000, 1000, 300000),
+    maxGas: parsePositiveInt(env.MAX_GAS, 200_000_000, 1_000_000, 50_000_000_000), // #19 gas ceiling (MIST)
+    executionLockTtlMs: parsePositiveInt(env.EXECUTION_LOCK_TTL_MS, 60000, 1000, 600000), // #20
+    alertWebhookUrl: str(env.ALERT_WEBHOOK_URL), // #21 (Discord/Telegram-compatible; no-op if empty)
+    indexerLagBudgetMs: parsePositiveInt(env.INDEXER_LAG_BUDGET_MS, 120000, 1000, 3600000), // #21 freshness gate
 
     // ── AI explanation (OpenAI gpt-5; reuses SeFi keys) ─────────────────────────
     openaiApiKey: str(env.OPENAI_API_KEY),

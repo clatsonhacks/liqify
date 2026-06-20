@@ -37,20 +37,25 @@ export class RiskAgent {
    * @param {object} [opts.realtimeHub]   SeFi RealtimeHub (optional)
    * @param {function} [opts.logger]
    */
-  constructor({ database, lsConfig, deriver, realtimeHub = null, logger = () => {} }) {
+  constructor({ database, lsConfig, deriver, scallopReader = null, alerter = null, realtimeHub = null, logger = () => {} }) {
     this.database = database;
     this.lsConfig = lsConfig;
     this.deriver = deriver;
+    this.scallopReader = scallopReader; // #9 pre/post obligation reads
+    this.alerter = alerter;             // #21 alerts (optional)
     this.realtimeHub = realtimeHub;
     this.logger = logger;
 
     this.rpc = new SuiRpcClient({ url: lsConfig.suiRpcUrl });
     this.stress = new Map(); // positionId -> { healthFactor?, haircutPct? }
+    this.disabledPositions = new Set(); // #9 auto-execute disabled (post-state didn't improve)
+    this.activeLocks = new Set();       // #20 in-memory fast guard
+    this.scallopReadFailures = 0;       // #21 metric
     this.isRunning = false;
     this.shouldStop = false;
     this.lastTickAt = null;
     this.lastTickSummary = null;
-    this.ptb = null; // lazily-imported { executeRescue, types }
+    this.ptb = null; // lazily-imported { executeRescue, builders, types }
 
     // ptb/dist/{types,scallop_rescue} read these from process.env at import time, falling
     // back to TESTNET defaults. The backend loads .env into config (not process.env), so we
@@ -81,8 +86,99 @@ export class RiskAgent {
     if (this.ptb) return this.ptb;
     const scallop = await import('../../../ptb/dist/scallop_rescue.js');
     const types = await import('../../../ptb/dist/types.js');
-    this.ptb = { executeRescue: scallop.executeRescue, types };
+    this.ptb = {
+      executeRescue: scallop.executeRescue,
+      buildScallopRepayPTB: scallop.buildScallopRepayPTB,
+      buildScallopTopupPTB: scallop.buildScallopTopupPTB,
+      types,
+    };
     return this.ptb;
+  }
+
+  /**
+   * #9 — read obligation state (HF/debt) before/after a rescue.
+   * Tries the Scallop SDK (real/mainnet); falls back to a direct object read (demo Scallop
+   * has a `debt` field). Returns { healthFactor, riskLevel, debt } or null.
+   */
+  async readObligationState(obligationId) {
+    if (!obligationId) return null;
+    if (this.scallopReader) {
+      try {
+        const live = await this.scallopReader.readObligation(obligationId);
+        if (live) return { healthFactor: live.healthFactor, riskLevel: live.riskLevel, debt: live.debtValue };
+      } catch { this.scallopReadFailures += 1; }
+    }
+    try {
+      const obj = await this.rpc.getObject({ id: obligationId, options: { showContent: true } });
+      const f = obj?.data?.content?.fields;
+      if (f && f.debt != null) return { healthFactor: null, riskLevel: null, debt: Number(f.debt) };
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  /** "Did the rescue improve the position?" HF up OR debt down. null = can't tell. */
+  static improved(before, after) {
+    if (!before || !after) return null;
+    if (Number.isFinite(before.healthFactor) && Number.isFinite(after.healthFactor)) return after.healthFactor > before.healthFactor;
+    if (Number.isFinite(before.debt) && Number.isFinite(after.debt)) return after.debt < before.debt;
+    return null;
+  }
+
+  // ── #20 concurrency / idempotency ──────────────────────────────────────────
+  acquireLock(key) {
+    const now = Date.now();
+    if (this.activeLocks.has(key)) return false;
+    const row = this.database.queryOne(`SELECT locked_until, status FROM execution_locks WHERE key = ?`, [key]);
+    if (row && row.status === 'locked' && Number(row.locked_until) > now) return false;
+    const until = now + this.lsConfig.executionLockTtlMs;
+    upsertRows(this.database, 'execution_locks', [{ key, obligation_id: key, locked_until: until, tx_digest: null, status: 'locked' }], ['key']);
+    this.activeLocks.add(key);
+    return true;
+  }
+
+  releaseLock(key, status = 'done', digest = null) {
+    this.activeLocks.delete(key);
+    try {
+      upsertRows(this.database, 'execution_locks', [{ key, obligation_id: key, locked_until: 0, tx_digest: digest, status }], ['key']);
+    } catch { /* ignore */ }
+  }
+
+  /**
+   * #19 — deeper simulation gate: build the rescue PTB, dry-run with full effects, and assert
+   * (a) target obligation is mutated, (b) no coin credited to a non-allowlisted address,
+   * (c) gas <= ceiling, (d) success. Returns { ok, reason, gas }.
+   */
+  async gatedDryRun(params) {
+    const { buildScallopRepayPTB, buildScallopTopupPTB } = await this.loadPtb();
+    const kp = this.agentKeypair();
+    const agentAddr = kp.getPublicKey().toSuiAddress();
+    const tx = params.actionType === 1 ? buildScallopTopupPTB(params) : buildScallopRepayPTB(params);
+    tx.setSender(agentAddr);
+    let dry;
+    try {
+      dry = await this.rpc.dryRunTransactionBlock({ transactionBlock: await tx.build({ client: this.rpc }) });
+    } catch (e) {
+      return { ok: false, reason: `dry-run error: ${String(e?.message || e).slice(0, 80)}` };
+    }
+    if (dry.effects?.status?.status !== 'success') {
+      return { ok: false, reason: `simulation failed: ${dry.effects?.status?.error || 'unknown'}` };
+    }
+    // (a) target obligation mutated
+    const mutated = (dry.objectChanges || []).some((c) => c.objectId === params.obligationId);
+    if (!mutated) return { ok: false, reason: 'target obligation not mutated by rescue' };
+    // (b) no coin credited to a non-allowlisted address (only the agent/sender is allowed)
+    const allow = new Set([agentAddr]);
+    for (const bc of dry.balanceChanges || []) {
+      const owner = bc.owner?.AddressOwner;
+      if (owner && !allow.has(owner) && BigInt(bc.amount) > 0n) {
+        return { ok: false, reason: `unexpected coin credit to ${owner.slice(0, 10)}…` };
+      }
+    }
+    // (c) gas ceiling
+    const g = dry.effects.gasUsed;
+    const gas = BigInt(g.computationCost) + BigInt(g.storageCost) - BigInt(g.storageRebate);
+    if (gas > BigInt(this.lsConfig.maxGas)) return { ok: false, reason: `gas ${gas} > ceiling ${this.lsConfig.maxGas}` };
+    return { ok: true, gas };
   }
 
   agentKeypair() {
@@ -196,7 +292,11 @@ export class RiskAgent {
 
     const nowMs = Date.now();
     const tsIso = new Date(nowMs).toISOString();
-    const willExecute = cfg.autoExecute && executable && scoreResult.score >= cfg.triggerScore;
+    const willExecute =
+      cfg.autoExecute &&
+      executable &&
+      scoreResult.score >= cfg.triggerScore &&
+      !this.disabledPositions.has(position.id); // #9 disabled if a prior rescue didn't improve
 
     // write risk_scores
     upsertRows(
@@ -243,51 +343,102 @@ export class RiskAgent {
       return { position_id: position.id, score: scoreResult.score, executed: false, blocked: 'policy' };
     }
 
+    // #20 — one rescue in flight per obligation (idempotency / no double-rescue)
+    const lockKey = position.obligation_id || position.id;
+    if (!this.acquireLock(lockKey)) {
+      return { position_id: position.id, score: scoreResult.score, executed: false, blocked: 'locked' };
+    }
+
+    const params = {
+      policyId: position.policy_id,
+      vaultId: position.vault_id,
+      snapshotId: position.snapshot_id,
+      positionId: position.id,
+      guardianCapId: cfg.guardianCapId,
+      obligationId: position.obligation_id,
+      protocol: position.protocol,
+      amount: BigInt(cfg.rescueAmount),
+      coinType: cfg.coinType,
+      actionType: recommendedActionCode,
+    };
+
     let digest = null;
+    let snapDigest = null;
+    let before = null;
+    let after = null;
+    let blockReason = null;
     try {
       const { executeRescue } = await this.loadPtb();
-      const snapDigest = await this.submitSnapshot(position, scoreResult, market, recommendedActionCode);
+
+      // #9 — pre-state
+      before = await this.readObligationState(position.obligation_id);
+
+      // submit fresh snapshot on-chain (required before rescue)
+      snapDigest = await this.submitSnapshot(position, scoreResult, market, recommendedActionCode);
       this.logger('info', 'snapshot_submitted', { position_id: position.id, digest: snapDigest });
       await sleep(2000); // let snapshot land
 
-      const params = {
-        policyId: position.policy_id,
-        vaultId: position.vault_id,
-        snapshotId: position.snapshot_id,
-        positionId: position.id,
-        guardianCapId: cfg.guardianCapId,
-        obligationId: position.obligation_id,
-        protocol: position.protocol,
-        amount: BigInt(cfg.rescueAmount),
-        coinType: cfg.coinType,
-        actionType: recommendedActionCode,
-      };
-      const result = await executeRescue(params, this.rpc);
-      digest = result?.digest ?? null;
+      // #19 — deeper simulation gate (effect-level assertions) before signing
+      const gate = await this.gatedDryRun(params);
+      if (!gate.ok) {
+        blockReason = `gate: ${gate.reason}`;
+      } else {
+        const result = await executeRescue(params, this.rpc);
+        digest = result?.digest ?? null;
+        if (!digest) blockReason = 'simulation/submission failed (fail-closed)';
+      }
     } catch (err) {
-      this.logger('error', 'rescue_error', { position_id: position.id, error: String(err?.message || err) });
+      blockReason = String(err?.message || err);
+      this.logger('error', 'rescue_error', { position_id: position.id, error: blockReason });
     }
 
+    // #9 — post-state + verification
+    let resultVerified = null;
+    if (digest) {
+      after = await this.readObligationState(position.obligation_id);
+      const ok = RiskAgent.improved(before, after);
+      resultVerified = ok === null ? null : ok ? 1 : 0;
+      if (ok === false) {
+        this.disabledPositions.add(position.id); // suspicious: rescue didn't improve -> stop auto-exec
+        this.logger('warn', 'rescue_no_improvement', { position_id: position.id });
+        this.alerter?.notify?.('rescue_no_improvement', { position_id: position.id, before, after });
+      }
+    }
+
+    const status = digest ? (resultVerified === 0 ? 'submitted-unverified' : 'executed') : 'blocked';
     this.recordAction(position, {
-      status: digest ? 'executed' : 'failed',
-      reason: digest ? null : 'simulation/submission failed (fail-closed)',
+      status,
+      reason: blockReason,
       action: recommendedAction,
       amount: Number(cfg.rescueAmount),
       digest,
+      simulationDigest: snapDigest,
       riskBefore: scoreResult.score,
+      beforeHf: before?.healthFactor ?? null,
+      afterHf: after?.healthFactor ?? null,
+      beforeLevel: before?.riskLevel ?? null,
+      afterLevel: after?.riskLevel ?? null,
+      resultVerified,
       tsIso,
     });
+    this.releaseLock(lockKey, digest ? 'done' : 'failed', digest);
     this.publish(digest ? 'shield_activated' : 'shield_blocked', {
       position_id: position.id,
       tx_digest: digest,
       action_type: recommendedAction,
       risk_before: scoreResult.score,
+      result_verified: resultVerified,
+      reason: blockReason,
     });
 
-    return { position_id: position.id, score: scoreResult.score, executed: Boolean(digest), digest };
+    return { position_id: position.id, score: scoreResult.score, executed: Boolean(digest), digest, result_verified: resultVerified };
   }
 
-  recordAction(position, { status, reason = null, action = null, amount = null, digest = null, riskBefore = null, tsIso }) {
+  recordAction(position, {
+    status, reason = null, action = null, amount = null, digest = null, riskBefore = null,
+    simulationDigest = null, beforeHf = null, afterHf = null, beforeLevel = null, afterLevel = null,
+    resultVerified = null, tsIso,
+  }) {
     upsertRows(
       this.database,
       'risk_actions',
@@ -305,6 +456,12 @@ export class RiskAgent {
           reason,
           risk_before: riskBefore,
           risk_after: null,
+          before_health_factor: beforeHf,
+          after_health_factor: afterHf,
+          before_risk_level: beforeLevel,
+          after_risk_level: afterLevel,
+          simulation_digest: simulationDigest,
+          result_verified: resultVerified,
           timestamp: tsIso,
         },
       ],

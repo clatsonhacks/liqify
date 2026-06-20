@@ -68,7 +68,7 @@ export async function bootstrapLiquifi({ database, realtimeHub, logger = () => {
   const deriver = new LiquidShieldDeriver({ database, lsConfig, scallopReader, logger });
   const scallopDeriver = new ScallopDeriver({ database, logger });
   const scallopReconciler = new ScallopReconciler({ database, scallopReader, lsConfig, logger });
-  const riskAgent = new RiskAgent({ database, lsConfig, deriver, realtimeHub, logger });
+  const riskAgent = new RiskAgent({ database, lsConfig, deriver, scallopReader, realtimeHub, logger });
 
   // Start loops (don't block server startup on a slow first poll).
   suiIndexer.start().catch((e) => logger('warn', 'sui_indexer_start_failed', { error: String(e?.message || e) }));
