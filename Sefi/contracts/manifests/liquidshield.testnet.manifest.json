@@ -1,0 +1,63 @@
+{
+  "protocol": "liquifi",
+  "chain": "sui",
+  "network": "testnet",
+  "description": "LiquidShield Guardian (liquifi) event sources indexed via Sui GraphQL. Each source is queried by `module` filter (package or package::module). Scallop/NAVI/DeepBook are read for monitoring + risk signals.",
+  "sources": [
+    {
+      "key": "liquidshield",
+      "role": "core",
+      "packageEnv": "LIQUIDSHIELD_PACKAGE_ID",
+      "package": "0x1a4bc48f7c7cff2bcada2189e3b9c9686c866579629d06af99278370e41f0ecf",
+      "modules": [
+        "shield_executor",
+        "shield_oracle",
+        "risk_policy",
+        "shield_registry",
+        "shield_vault",
+        "guardian_cap"
+      ],
+      "events": [
+        "shield_executor::ShieldActivatedEvent",
+        "shield_executor::ShieldBlockedEvent",
+        "shield_oracle::RiskScoreUpdatedEvent",
+        "shield_oracle::RiskSnapshotCreatedEvent",
+        "risk_policy::PolicyCreatedEvent",
+        "risk_policy::PolicyChangedEvent",
+        "risk_policy::PolicyPausedEvent",
+        "risk_policy::ProtectionRevokedEvent",
+        "risk_policy::OverrideExecutedEvent",
+        "shield_registry::ProtectionRegisteredEvent",
+        "shield_registry::ProtectionDeregisteredEvent",
+        "shield_vault::ReserveDepositedEvent",
+        "shield_vault::ReserveWithdrawnEvent",
+        "guardian_cap::GuardianCapMintedEvent",
+        "guardian_cap::GuardianCapRevokedEvent"
+      ]
+    },
+    {
+      "key": "scallop",
+      "role": "monitor-rescue-target",
+      "packageEnv": "SCALLOP_PACKAGE_ID",
+      "package": "0xd971609b7feb6230585831e7aeb3c121fb21b9431337a30fc99185eb459a05ee",
+      "modules": ["borrow", "repay", "deposit_collateral", "liquidation"],
+      "events": []
+    },
+    {
+      "key": "navi",
+      "role": "monitor-only",
+      "packageEnv": "NAVI_PACKAGE_ID",
+      "package": "",
+      "modules": ["lending"],
+      "events": []
+    },
+    {
+      "key": "deepbook",
+      "role": "liquidity-signal",
+      "packageEnv": "DEEPBOOK_PACKAGE_ID",
+      "package": "",
+      "modules": [],
+      "note": "Primary DeepBook liquidity signal comes from the DeepBook v3 indexer REST API (/summary, /orderbook), not on-chain events. On-chain event indexing optional."
+    }
+  ]
+}
