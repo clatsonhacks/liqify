@@ -20,6 +20,7 @@ import { SuiClient } from './sui-client.js';
 import { SuiIndexer } from './sui-indexer.js';
 import { ScallopReader } from './scallop-reader.js';
 import { ScallopDeriver } from './scallop-deriver.js';
+import { ScallopDiscovery } from './scallop-discovery.js';
 import { LiquidShieldDeriver } from './liquidshield-deriver.js';
 import { RiskAgent } from './risk-agent.js';
 
@@ -62,6 +63,7 @@ export async function bootstrapLiquifi({ database, realtimeHub, logger = () => {
   });
 
   const scallopReader = new ScallopReader(lsConfig);
+  const scallopDiscovery = new ScallopDiscovery(lsConfig);
   const deriver = new LiquidShieldDeriver({ database, lsConfig, scallopReader, logger });
   const scallopDeriver = new ScallopDeriver({ database, logger });
   const riskAgent = new RiskAgent({ database, lsConfig, deriver, realtimeHub, logger });
@@ -78,12 +80,22 @@ export async function bootstrapLiquifi({ database, realtimeHub, logger = () => {
   const readiness = liquifiReadiness(lsConfig);
   logger('info', 'liquifi_bootstrapped', { ready: readiness.ready, missing: readiness.missing });
 
-  return { lsConfig, suiClient, suiIndexer, scallopReader, deriver, scallopDeriver, riskAgent, database, realtimeHub };
+  return { lsConfig, suiClient, suiIndexer, scallopReader, scallopDiscovery, deriver, scallopDeriver, riskAgent, database, realtimeHub };
 }
 
 /** Mount the frontend-facing /api/* routes. */
 export function registerLiquidShieldRoutes(app, ctx) {
-  const { database, lsConfig, suiIndexer, riskAgent, realtimeHub } = ctx;
+  const { database, lsConfig, suiIndexer, riskAgent, realtimeHub, scallopDiscovery } = ctx;
+
+  // ── GET /api/scallop/positions?owner=0x… — wallet-based obligation discovery (#1) ──
+  app.get('/api/scallop/positions', asyncRoute(async (req, res) => {
+    const owner = String(req.query.owner || '').trim();
+    if (!owner.startsWith('0x')) {
+      return res.status(400).json({ error: { code: 'BAD_OWNER', message: 'owner query param (0x…) required' } });
+    }
+    const positions = await scallopDiscovery.discoverScallopObligations(owner);
+    res.json({ owner, count: positions.length, positions });
+  }));
 
   const latestMarket = () =>
     database.queryOne(`SELECT * FROM market_snapshots ORDER BY timestamp DESC LIMIT 1`);
