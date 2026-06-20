@@ -180,6 +180,19 @@ export function registerLiquidShieldRoutes(app, ctx) {
     res.json({ tick: summary });
   }));
 
+  // ── Sui indexer control (replaces the Hedera "Full Sync") ──────────────────────
+  // The Sui indexer auto-polls, but this lets the UI force an immediate sync.
+  app.post('/api/sui/sync', asyncRoute(async (_req, res) => {
+    const t0 = Date.now();
+    const inserted = await suiIndexer.pollOnce();
+    const durationMs = Date.now() - t0;
+    const status = suiIndexer.getStatus();
+    res.json({ inserted, duration_ms: durationMs, events_total: status.events_total, status });
+  }));
+  app.get('/api/sui/status', asyncRoute(async (_req, res) => {
+    res.json(suiIndexer.getStatus());
+  }));
+
   // ── POST /api/override (real on-chain DAO pause/unpause/revoke) ────────────────
   app.post('/api/override', asyncRoute(async (req, res) => {
     const body = req.body || {};

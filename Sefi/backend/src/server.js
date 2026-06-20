@@ -382,16 +382,20 @@ async function main() {
   let agentSchedulerTimer = null;
   let agentSchedulerRunning = false;
 
-  try {
-    const bootstrap = agentOrchestrator.ensureBonzoClmmGuardAgent();
-    if (bootstrap.created) {
-      database.logActivity('agent_bootstrap', bootstrap.agent.id, `Bootstrapped ${bootstrap.agent.name}`);
-      log('info', 'agent_bootstrapped', { agent_id: bootstrap.agent.id, name: bootstrap.agent.name });
+  // liquifi is Sui-only — the Hedera/Bonzo CLMM guard agent is disabled by default so it
+  // doesn't run or clutter the activity log. Set ENABLE_HEDERA_AGENTS=true to restore it.
+  if (process.env.ENABLE_HEDERA_AGENTS === 'true') {
+    try {
+      const bootstrap = agentOrchestrator.ensureBonzoClmmGuardAgent();
+      if (bootstrap.created) {
+        database.logActivity('agent_bootstrap', bootstrap.agent.id, `Bootstrapped ${bootstrap.agent.name}`);
+        log('info', 'agent_bootstrapped', { agent_id: bootstrap.agent.id, name: bootstrap.agent.name });
+      }
+    } catch (error) {
+      log('warn', 'agent_bootstrap_failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
-  } catch (error) {
-    log('warn', 'agent_bootstrap_failed', {
-      message: error instanceof Error ? error.message : String(error),
-    });
   }
 
   try {
@@ -2527,23 +2531,27 @@ async function main() {
     sendError(res, req, 404, 'NOT_FOUND', `Endpoint not found: ${req.method} ${req.path}`);
   });
 
-  agentSchedulerTimer = setInterval(() => {
-    runScheduledAgentTick().catch((error) => {
-      log('warn', 'agent_schedule_tick_failed', {
-        error: error instanceof Error ? error.message : String(error),
+  // Hedera/Bonzo agent scheduler — disabled for liquifi (Sui-only). The liquifi risk
+  // agent has its own loop. Set ENABLE_HEDERA_AGENTS=true to restore the Bonzo scheduler.
+  if (process.env.ENABLE_HEDERA_AGENTS === 'true') {
+    agentSchedulerTimer = setInterval(() => {
+      runScheduledAgentTick().catch((error) => {
+        log('warn', 'agent_schedule_tick_failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
-    });
-  }, 30000);
-  if (typeof agentSchedulerTimer.unref === 'function') {
-    agentSchedulerTimer.unref();
+    }, 30000);
+    if (typeof agentSchedulerTimer.unref === 'function') {
+      agentSchedulerTimer.unref();
+    }
+    setTimeout(() => {
+      runScheduledAgentTick().catch((error) => {
+        log('warn', 'agent_schedule_tick_failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, 2500);
   }
-  setTimeout(() => {
-    runScheduledAgentTick().catch((error) => {
-      log('warn', 'agent_schedule_tick_failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  }, 2500);
 
   // ── liquifi (Sui plane): bootstrap indexer + agent, mount /api/* routes ──
   let liquifiCtx = null;

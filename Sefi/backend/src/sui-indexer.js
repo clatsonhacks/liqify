@@ -17,6 +17,7 @@
 
 import fs from 'fs';
 import { normalizeEventNode } from './sui-events.js';
+import { SuiClient } from './sui-client.js';
 
 const PAGE_SIZE = 50;
 const MAX_PAGES_PER_POLL = 20; // backfill cap per source per poll cycle
@@ -46,7 +47,17 @@ export class SuiIndexer {
     this.shouldStop = false;
     this.lastPollAt = null;
     this.eventCallbacks = [];
+    this.clientCache = new Map(); // per-source GraphQL client, keyed by url
     this.sources = this.loadSources();
+  }
+
+  /** Client for a source: its own graphqlUrl if set (e.g. mainnet Scallop), else the default. */
+  clientFor(source) {
+    if (!source.graphqlUrl) return this.client;
+    if (!this.clientCache.has(source.graphqlUrl)) {
+      this.clientCache.set(source.graphqlUrl, new SuiClient({ url: source.graphqlUrl }));
+    }
+    return this.clientCache.get(source.graphqlUrl);
   }
 
   onEvent(cb) {
@@ -77,13 +88,19 @@ export class SuiIndexer {
     }
     const out = [];
     for (const src of manifest.sources || []) {
+      // Optional env gate: source only active when its enabledEnv var === '1' (e.g. a
+      // heavy mainnet backfill you opt into for a benchmark, off by default).
+      if (src.enabledEnv && String(process.env[src.enabledEnv] || '') !== '1') {
+        continue;
+      }
       const envPackage = src.packageEnv ? String(process.env[src.packageEnv] || '').trim() : '';
       const packageId = envPackage || String(src.package || '').trim();
       if (!packageId) {
         this.logger('info', 'source_skipped_no_package', { key: src.key, role: src.role });
         continue;
       }
-      out.push({ key: src.key, role: src.role, packageId, modules: src.modules || [] });
+      const graphqlUrl = src.graphqlUrl ? String(src.graphqlUrl).trim() : (src.graphqlUrlEnv ? String(process.env[src.graphqlUrlEnv] || '').trim() : '');
+      out.push({ key: src.key, role: src.role, packageId, modules: src.modules || [], graphqlUrl: graphqlUrl || null });
     }
     return out;
   }
@@ -111,13 +128,14 @@ export class SuiIndexer {
    */
   async pollSource(source) {
     const syncId = this.syncKey(source);
+    const client = this.clientFor(source);
     let cursor = this.database.getSyncState(syncId)?.last_tx_id || null;
     let inserted = 0;
 
     for (let page = 0; page < MAX_PAGES_PER_POLL && !this.shouldStop; page += 1) {
       let result;
       try {
-        result = await this.client.queryEvents({
+        result = await client.queryEvents({
           module: source.packageId,
           after: cursor,
           first: PAGE_SIZE,

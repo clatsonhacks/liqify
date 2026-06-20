@@ -14,6 +14,11 @@ const nextConfig = {
         source: '/api/v1/:path*',
         destination: `${backendOrigin}/api/v1/:path*`,
       },
+      {
+        // liquifi (Sui) endpoints live under /api/* (no v1): dashboard, events, sui/sync, etc.
+        source: '/api/:path*',
+        destination: `${backendOrigin}/api/:path*`,
+      },
     ];
   },
 };

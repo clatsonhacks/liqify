@@ -126,6 +126,11 @@ The price stress only moves the *trigger*; the rescue PTB that fires is 100% rea
 ### POST `/api/trigger-agent`  — force one agent tick now
 → `{ "tick": { "positions": 1, "results": [ { "position_id": "...", "score": 95, "executed": true, "digest": "..." } ] } }`
 
+### POST `/api/sui/sync` · GET `/api/sui/status`  — Sui indexer control
+The Sui indexer auto-polls every ~10s; `/api/sui/sync` forces an immediate poll. This is what
+the SeFi UI's sync button now calls (the old Hedera "Full Sync" is disabled — liquifi is Sui-only).
+→ `{ "inserted": 3, "status": { "running": true, "events_total": 11, "sources": [...] } }`
+
 ### POST `/api/override`  — **real on-chain** DAO pause/unpause/revoke
 ```jsonc
 { "action": "pause" }   // pause|unpause|revoke ; needs USER_PRIVATE_KEY (DAO cap holder) in .env

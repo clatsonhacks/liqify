@@ -9,6 +9,7 @@ import {
   getContractsProgress,
   getRecentRecords,
   triggerIndexerAction,
+  triggerSuiSync,
   type OverviewResponse,
   type ActivityRecord,
   type ContractProgress,
@@ -66,6 +67,7 @@ export default function IndexOverviewPage() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
   const [recentRecords, setRecentRecords] = useState<Array<Record<string, unknown>>>([]);
 
   const isRunning = status?.isRunning || false;
@@ -97,9 +99,19 @@ export default function IndexOverviewPage() {
   }, [isRunning]);
 
   const handleStartSync = async () => {
-    setSyncing(true); setSyncError(null);
-    try { const r = await triggerIndexerAction('sync'); if (r.error) setSyncError(r.error); }
-    catch (e) { setSyncError(e instanceof Error ? e.message : 'Failed to start sync'); }
+    // liquifi is Sui-only: force an immediate Sui indexer poll (not the Hedera sync).
+    setSyncing(true); setSyncError(null); setSyncResult(null);
+    const t0 = Date.now();
+    try {
+      const r = await triggerSuiSync();
+      if (r.error) { setSyncError(r.error); }
+      else {
+        const serverMs = typeof r.duration_ms === 'number' ? r.duration_ms : (Date.now() - t0);
+        setSyncResult(`Synced ${r.inserted ?? 0} new event(s) in ${serverMs}ms · ${r.events_total ?? '?'} total`);
+      }
+      await refresh();
+    }
+    catch (e) { setSyncError(e instanceof Error ? e.message : 'Failed to sync Sui'); }
     finally { setSyncing(false); }
   };
 
@@ -162,6 +174,7 @@ export default function IndexOverviewPage() {
           )}
         </div>
         <div className="flex items-center gap-3">
+          {syncResult && <span className="text-xs text-[#b9f2d1]">{syncResult}</span>}
           {syncError && <span className="text-xs text-red-400">{syncError}</span>}
           {isRunning ? (
             <button onClick={handleStop} disabled={syncing}
@@ -171,7 +184,7 @@ export default function IndexOverviewPage() {
           ) : (
             <button onClick={handleStartSync} disabled={syncing}
               className="px-5 py-2 rounded-full bg-[#b6efce] text-[#002113] text-xs font-bold uppercase tracking-widest flex items-center gap-2 hover:shadow-[0_0_15px_rgba(185,242,209,0.3)] transition-all disabled:opacity-50">
-              {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} Start Full Sync
+              {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} Sync Sui Now
             </button>
           )}
         </div>
@@ -228,8 +241,8 @@ export default function IndexOverviewPage() {
           <div className="bg-[#1c1b1c] p-8 rounded-xl border border-white/[0.04]">
             <div className="flex items-start justify-between gap-8">
               <div className="flex-1 min-w-0">
-                <h3 className="text-[11px] uppercase tracking-widest text-gray-400">Hedera EVM Event Logs</h3>
-                <p className="text-sm text-gray-500 mt-1">Total captured from consensus service</p>
+                <h3 className="text-[11px] uppercase tracking-widest text-gray-400">Sui Event Logs (LiquidShield)</h3>
+                <p className="text-sm text-gray-500 mt-1">Indexed from Sui testnet via GraphQL</p>
                 <div className="mt-5 flex items-center gap-3">
                   <span className="text-[clamp(2.5rem,6vw,4.5rem)] font-display font-extrabold text-white tracking-tighter leading-none">
                     {hasData ? formatLargeNumber(totalLogs) : '--'}

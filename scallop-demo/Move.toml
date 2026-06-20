@@ -1,0 +1,7 @@
+[package]
+name = "scallop_demo"
+version = "0.0.1"
+edition = "2024.beta"
+
+[addresses]
+scallop_demo = "0x0"

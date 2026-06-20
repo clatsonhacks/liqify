@@ -7,6 +7,20 @@ export const API_BASE =
     : LOCAL_API_BASE);
 const API_TOKEN = process.env.NEXT_PUBLIC_SEFI_API_TOKEN || '';
 
+// liquifi (Sui) endpoints live under /api (not /api/v1).
+export const LIQUIFI_API_BASE = API_BASE.replace(/\/api\/v1$/, '/api');
+
+/** Force an immediate Sui indexer poll (replaces the Hedera "Full Sync"). */
+export async function triggerSuiSync(): Promise<{ inserted?: number; duration_ms?: number; events_total?: number; error?: string }> {
+  try {
+    const res = await fetch(`${LIQUIFI_API_BASE}/sui/sync`, { method: 'POST' });
+    if (!res.ok) return { error: `HTTP ${res.status}` };
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : 'sui sync failed' };
+  }
+}
+
 const READ_RETRY_DELAYS_MS = [250, 750];
 const READ_TIMEOUT_MS = 7000;
 const WRITE_TIMEOUT_MS = 15000;

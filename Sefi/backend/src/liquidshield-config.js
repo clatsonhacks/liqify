@@ -28,6 +28,10 @@ function parseDotEnvFile(filePath) {
       (value.startsWith("'") && value.endsWith("'"))
     ) {
       value = value.slice(1, -1);
+    } else {
+      // Strip inline comments on unquoted values (e.g. `RESCUE_AMOUNT=10000000  # note`).
+      const hash = value.indexOf(' #');
+      if (hash >= 0) value = value.slice(0, hash).trim();
     }
     result[key] = value;
   }
@@ -56,9 +60,13 @@ export function createLiquifiConfig(runtimeEnv = process.env) {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = dirname(__filename);
   const sefiRoot = join(__dirname, '..', '..');
+  const backendRoot = join(__dirname, '..');
   const shouldLoadDotEnv = runtimeEnv === process.env;
-  const dotEnvValues = shouldLoadDotEnv ? parseDotEnvFile(join(sefiRoot, '.env')) : {};
-  const env = { ...dotEnvValues, ...runtimeEnv };
+  // Support .env in either Sefi/.env (SeFi default) or Sefi/backend/.env (next to .env.example).
+  // backend/.env wins over root .env; process.env wins over both.
+  const rootEnv = shouldLoadDotEnv ? parseDotEnvFile(join(sefiRoot, '.env')) : {};
+  const backendEnv = shouldLoadDotEnv ? parseDotEnvFile(join(backendRoot, '.env')) : {};
+  const env = { ...rootEnv, ...backendEnv, ...runtimeEnv };
 
   return {
     // ── Networks ──────────────────────────────────────────────────────────────

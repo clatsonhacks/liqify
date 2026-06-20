@@ -44,6 +44,16 @@
       "events": []
     },
     {
+      "key": "scallop-mainnet",
+      "role": "benchmark",
+      "enabledEnv": "SCALLOP_MAINNET_BENCH",
+      "graphqlUrl": "https://graphql.mainnet.sui.io/graphql",
+      "package": "0xde5c09ad171544aa3724dc67216668c80e754860f419136a68d78504eb2e2805",
+      "modules": ["borrow", "repay", "deposit_collateral", "withdraw_collateral", "liquidation"],
+      "events": [],
+      "note": "OPT-IN benchmark only (set SCALLOP_MAINNET_BENCH=1). Indexes real Scallop MAINNET lending events into SeFi to watch indexing speed in the FE. Off by default (full history is large)."
+    },
+    {
       "key": "navi",
       "role": "monitor-only",
       "packageEnv": "NAVI_PACKAGE_ID",
