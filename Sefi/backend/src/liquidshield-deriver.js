@@ -62,12 +62,14 @@ export class LiquidShieldDeriver {
       const j = parseJsonSafe(ev.data);
       if (!j) continue;
 
-      const positionId = j.position_id;
+      // New ProtectionRegisteredEvent carries obligation_id, vault_id, policy_id directly.
       const protocol = decodeByteVector(j.protocol) || 'scallop';
       const obligationId = j.obligation_id || '';
       const collateralAsset = decodeByteVector(j.collateral_asset) || cfg.collateralAsset;
       const debtAsset = decodeByteVector(j.debt_asset) || cfg.debtAsset;
-      const isThisDemoPosition = positionId === cfg.positionId;
+      // Use obligation_id as the position row key (no per-user ProtectedPosition anymore).
+      const positionId = obligationId || j.position_id;
+      const isThisDemoPosition = obligationId === cfg.obligationId;
 
       let collateralValue = null;
       let debtValue = null;
@@ -97,8 +99,11 @@ export class LiquidShieldDeriver {
         health_factor: healthFactor,
         risk_level: riskLevel,
         status,
-        policy_id: isThisDemoPosition ? cfg.riskPolicyId || null : null,
-        vault_id: isThisDemoPosition ? cfg.vaultId || null : null,
+        // vault_id and policy_id are now emitted directly in ProtectionRegisteredEvent.
+        // Fall back to config for the demo position if the event pre-dates this change.
+        policy_id: j.policy_id || (isThisDemoPosition ? cfg.riskPolicyId || null : null),
+        vault_id: j.vault_id || (isThisDemoPosition ? cfg.vaultId || null : null),
+        // snapshot_id is NOT in the event; use config for the demo position.
         snapshot_id: isThisDemoPosition ? cfg.snapshotId || null : null,
         last_updated: new Date().toISOString(),
       };
