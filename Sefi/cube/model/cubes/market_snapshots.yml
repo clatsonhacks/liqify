@@ -1,0 +1,73 @@
+cubes:
+  - name: market_snapshots
+    sql_table: main.market_snapshots
+    data_source: default
+
+    joins: []
+
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+
+      - name: asset_pair
+        sql: asset_pair
+        type: string
+
+      - name: mid_price
+        sql: CAST(mid_price AS REAL)
+        type: number
+
+      - name: oracle_age_ms
+        sql: CAST(oracle_age_ms AS REAL)
+        type: number
+
+      - name: spread
+        sql: CAST(spread AS REAL)
+        type: number
+
+      - name: liquidity_score
+        sql: CAST(liquidity_score AS REAL)
+        type: number
+
+      - name: liquidity_depth
+        sql: CAST(liquidity_depth AS REAL)
+        type: number
+
+      - name: volume_24h
+        sql: CAST(volume_24h AS REAL)
+        type: number
+
+      - name: price_change_pct_24h
+        sql: CAST(price_change_pct_24h AS REAL)
+        type: number
+
+      - name: timestamp
+        sql: timestamp
+        type: time
+
+    measures:
+      - name: count
+        type: count
+
+      - name: avg_mid_price
+        sql: CAST(mid_price AS REAL)
+        type: avg
+
+      - name: last_price
+        sql: CAST(mid_price AS REAL)
+        type: max
+
+      - name: avg_liquidity_score
+        sql: CAST(liquidity_score AS REAL)
+        type: avg
+
+      - name: max_oracle_age_ms
+        sql: CAST(oracle_age_ms AS REAL)
+        type: max
+
+      - name: stale_oracle_count
+        type: count
+        filters:
+          - sql: "CAST({CUBE}.oracle_age_ms AS REAL) > 120000"

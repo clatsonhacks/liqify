@@ -1,0 +1,83 @@
+cubes:
+  - name: risk_actions
+    sql_table: main.risk_actions
+    data_source: default
+
+    joins: []
+
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+
+      - name: position_id
+        sql: position_id
+        type: string
+
+      - name: wallet_address
+        sql: lower(wallet_address)
+        type: string
+
+      - name: protocol
+        sql: protocol
+        type: string
+
+      - name: action_type
+        sql: action_type
+        type: string
+
+      - name: status
+        sql: status
+        type: string
+
+      - name: tx_digest
+        sql: tx_digest
+        type: string
+
+      - name: reason
+        sql: reason
+        type: string
+
+      - name: amount
+        sql: CAST(amount AS REAL)
+        type: number
+
+      - name: risk_before
+        sql: CAST(risk_before AS REAL)
+        type: number
+
+      - name: risk_after
+        sql: CAST(risk_after AS REAL)
+        type: number
+
+      - name: timestamp
+        sql: timestamp
+        type: time
+
+    measures:
+      - name: count
+        type: count
+
+      - name: executed_count
+        type: count
+        filters:
+          - sql: "{CUBE}.status = 'executed'"
+
+      - name: blocked_count
+        type: count
+        filters:
+          - sql: "{CUBE}.status = 'blocked'"
+
+      - name: failed_count
+        type: count
+        filters:
+          - sql: "{CUBE}.status = 'failed'"
+
+      - name: total_amount
+        sql: CAST(amount AS REAL)
+        type: sum
+
+      - name: avg_risk_before
+        sql: CAST(risk_before AS REAL)
+        type: avg

@@ -1,0 +1,74 @@
+cubes:
+  - name: risk_scores
+    sql_table: main.risk_scores
+    data_source: default
+
+    joins: []
+
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+
+      - name: position_id
+        sql: position_id
+        type: string
+
+      - name: market
+        sql: market
+        type: string
+
+      - name: protocol
+        sql: protocol
+        type: string
+
+      - name: risk_level
+        sql: risk_level
+        type: string
+
+      - name: recommended_action
+        sql: recommended_action
+        type: string
+
+      - name: reason
+        sql: reason
+        type: string
+
+      - name: reason_codes
+        sql: CAST(reason_codes AS REAL)
+        type: number
+
+      - name: can_execute
+        sql: CASE WHEN can_execute = 1 THEN 'true' ELSE 'false' END
+        type: boolean
+
+      - name: risk_score
+        sql: CAST(risk_score AS REAL)
+        type: number
+
+      - name: timestamp
+        sql: timestamp
+        type: time
+
+    measures:
+      - name: count
+        type: count
+
+      - name: latest_score
+        sql: CAST(risk_score AS REAL)
+        type: max
+
+      - name: avg_score
+        sql: CAST(risk_score AS REAL)
+        type: avg
+
+      - name: emergency_count
+        type: count
+        filters:
+          - sql: "{CUBE}.risk_level = 'emergency'"
+
+      - name: executable_count
+        type: count
+        filters:
+          - sql: "{CUBE}.can_execute = 1"

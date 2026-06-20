@@ -1,0 +1,90 @@
+cubes:
+  - name: positions
+    sql_table: main.positions
+    data_source: default
+
+    joins: []
+
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+
+      - name: wallet_address
+        sql: lower(wallet_address)
+        type: string
+
+      - name: protocol
+        sql: protocol
+        type: string
+
+      - name: obligation_id
+        sql: obligation_id
+        type: string
+
+      - name: collateral_asset
+        sql: collateral_asset
+        type: string
+
+      - name: debt_asset
+        sql: debt_asset
+        type: string
+
+      - name: risk_level
+        sql: risk_level
+        type: string
+
+      - name: status
+        sql: status
+        type: string
+
+      - name: health_factor
+        sql: CAST(health_factor AS REAL)
+        type: number
+
+      - name: distance_to_liquidation
+        sql: (CAST(health_factor AS REAL) - 1.0)
+        type: number
+
+      - name: collateral_value
+        sql: CAST(collateral_value AS REAL)
+        type: number
+
+      - name: debt_value
+        sql: CAST(debt_value AS REAL)
+        type: number
+
+      - name: last_updated
+        sql: last_updated
+        type: time
+
+    measures:
+      - name: count
+        type: count
+
+      - name: protected_count
+        type: count
+        filters:
+          - sql: "{CUBE}.status = 'protected'"
+
+      - name: monitoring_count
+        type: count
+        filters:
+          - sql: "{CUBE}.status = 'monitoring-only'"
+
+      - name: avg_health_factor
+        sql: CAST(health_factor AS REAL)
+        type: avg
+
+      - name: min_health_factor
+        sql: CAST(health_factor AS REAL)
+        type: min
+
+      - name: total_collateral_value
+        sql: CAST(collateral_value AS REAL)
+        type: sum
+
+      - name: total_debt_value
+        sql: CAST(debt_value AS REAL)
+        type: sum
