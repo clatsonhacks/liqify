@@ -66,6 +66,7 @@ export class RiskAgent {
       SUI_RPC_URL: lsConfig.suiRpcUrl,
       LIQUIDSHIELD_PACKAGE_ID: lsConfig.packageId,
       SHIELD_REGISTRY_ID: lsConfig.shieldRegistryId,
+      GUARDIAN_DELEGATION_ID: lsConfig.guardianDelegationId,
       SCALLOP_PACKAGE_ID: lsConfig.scallopPackageId,
       SCALLOP_VERSION_ID: lsConfig.scallopVersionId,
       SCALLOP_MARKET_ID: lsConfig.scallopMarketId,
@@ -386,8 +387,8 @@ export class RiskAgent {
       policyId: position.policy_id,
       vaultId: position.vault_id,
       snapshotId: position.snapshot_id,
-      positionId: position.id,
-      guardianCapId: cfg.guardianCapId,
+      registryId: cfg.shieldRegistryId,          // singleton shared registry
+      guardianDelegationId: cfg.guardianDelegationId,
       obligationId: position.obligation_id,
       protocol: position.protocol,
       amount: BigInt(cfg.rescueAmount),
