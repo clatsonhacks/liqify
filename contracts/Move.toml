@@ -3,5 +3,8 @@ name = "liquidshield"
 version = "0.0.1"
 edition = "2024.beta"
 
+[dependencies]
+scallop_demo = { local = "../scallop-demo" }
+
 [addresses]
 liquidshield = "0x0"

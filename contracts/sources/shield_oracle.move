@@ -13,17 +13,18 @@ module liquidshield::shield_oracle {
     // Structs
     // ═══════════════════════════════════════════════
 
-    /// One shared RiskSnapshot per protected position.
-    /// The agent updates this every monitoring cycle.
+    /// One shared RiskSnapshot per protected obligation.
+    /// Keyed by obligation_id (the Scallop / NAVI obligation address).
     public struct RiskSnapshot has key {
         id: UID,
-        /// The ProtectedPosition this snapshot belongs to
-        position_id: ID,
+        /// The on-chain obligation address this snapshot tracks.
+        /// Used by the executor to prove the snapshot matches the rescue target.
+        obligation_id: address,
         /// Who is authorized to push updates (the agent address)
         agent: address,
         /// Composite risk score 0-100
         risk_score: u8,
-        /// Human-readable severity tag: 0=normal,1=watch,2=guarded,3=emergency
+        /// Human-readable severity: 0=normal,1=watch,2=guarded,3=emergency
         severity: u8,
         /// Encoded reason flags (bit mask): see reason code constants below
         reason_codes: u64,
@@ -43,18 +44,12 @@ module liquidshield::shield_oracle {
     // Reason code bit flags (OR together)
     // ═══════════════════════════════════════════════
 
-    // Low health factor — close to liquidation boundary
-    const REASON_LOW_HEALTH_FACTOR: u64   = 1;
-    // Price dropped significantly since last snapshot
-    const REASON_PRICE_DROP: u64          = 2;
-    // Oracle feed is stale or low-confidence
-    const REASON_STALE_ORACLE: u64        = 4;
-    // DeepBook liquidity thin for the collateral/debt pair
-    const REASON_LOW_LIQUIDITY: u64       = 8;
-    // High realized or implied volatility
-    const REASON_HIGH_VOLATILITY: u64     = 16;
-    // Reserve fund almost exhausted
-    const REASON_LOW_RESERVE: u64         = 32;
+    const REASON_LOW_HEALTH_FACTOR: u64 = 1;
+    const REASON_PRICE_DROP: u64        = 2;
+    const REASON_STALE_ORACLE: u64      = 4;
+    const REASON_LOW_LIQUIDITY: u64     = 8;
+    const REASON_HIGH_VOLATILITY: u64   = 16;
+    const REASON_LOW_RESERVE: u64       = 32;
 
     // ═══════════════════════════════════════════════
     // Events
@@ -62,13 +57,13 @@ module liquidshield::shield_oracle {
 
     public struct RiskSnapshotCreatedEvent has copy, drop {
         snapshot_id: ID,
-        position_id: ID,
+        obligation_id: address,
         agent: address,
     }
 
     public struct RiskScoreUpdatedEvent has copy, drop {
         snapshot_id: ID,
-        position_id: ID,
+        obligation_id: address,
         risk_score: u8,
         severity: u8,
         reason_codes: u64,
@@ -86,13 +81,13 @@ module liquidshield::shield_oracle {
     const E_SCORE_BELOW_TRIGGER: u64 = 3;
 
     // ═══════════════════════════════════════════════
-    // Agent setup
+    // Setup — create snapshot during onboarding
     // ═══════════════════════════════════════════════
 
-    /// Create a RiskSnapshot for a position and share it.
-    /// Called once by the user (or agent during onboarding) per position.
+    /// Create a RiskSnapshot for an obligation and share it.
+    /// Called once per obligation during user onboarding.
     public entry fun create_snapshot(
-        position_id: ID,
+        obligation_id: address,
         agent: address,
         clock: &Clock,
         ctx: &mut TxContext,
@@ -100,7 +95,7 @@ module liquidshield::shield_oracle {
         let now = clock::timestamp_ms(clock);
         let snapshot = RiskSnapshot {
             id: object::new(ctx),
-            position_id,
+            obligation_id,
             agent,
             risk_score: 0,
             severity: 0,
@@ -113,7 +108,7 @@ module liquidshield::shield_oracle {
         };
         event::emit(RiskSnapshotCreatedEvent {
             snapshot_id: object::id(&snapshot),
-            position_id,
+            obligation_id,
             agent,
         });
         transfer::share_object(snapshot);
@@ -123,8 +118,8 @@ module liquidshield::shield_oracle {
     // Agent push
     // ═══════════════════════════════════════════════
 
-    /// Agent submits an updated risk snapshot. This is typically step 1 of
-    /// a rescue PTB (or a separate preceding TX in the monitoring loop).
+    /// Agent submits an updated risk snapshot. Typically the first step of a
+    /// rescue PTB or a preceding monitoring TX.
     public entry fun submit_risk_snapshot(
         snapshot: &mut RiskSnapshot,
         risk_score: u8,
@@ -149,7 +144,7 @@ module liquidshield::shield_oracle {
         snapshot.price_feed_at_ms = price_feed_at_ms;
         event::emit(RiskScoreUpdatedEvent {
             snapshot_id: object::id(snapshot),
-            position_id: snapshot.position_id,
+            obligation_id: snapshot.obligation_id,
             risk_score,
             severity,
             reason_codes,
@@ -163,8 +158,7 @@ module liquidshield::shield_oracle {
     // Guard — called by executor
     // ═══════════════════════════════════════════════
 
-    /// Abort if the snapshot is older than `max_age_ms` or if the risk score
-    /// has not reached `trigger_score`. Both checks must pass for execution.
+    /// Abort if the snapshot is older than `max_age_ms` or score < `trigger_score`.
     public fun assert_fresh_and_triggered(
         snapshot: &RiskSnapshot,
         trigger_score: u8,
@@ -180,20 +174,23 @@ module liquidshield::shield_oracle {
     // Accessors
     // ═══════════════════════════════════════════════
 
+    /// Returns the obligation address this snapshot tracks.
+    /// Used by the executor's cross-object consistency check.
+    public fun position_key(s: &RiskSnapshot): address { s.obligation_id }
+    public fun obligation_id(s: &RiskSnapshot): address { s.obligation_id }
     public fun risk_score(s: &RiskSnapshot): u8 { s.risk_score }
     public fun severity(s: &RiskSnapshot): u8 { s.severity }
     public fun reason_codes(s: &RiskSnapshot): u64 { s.reason_codes }
     public fun recommended_action(s: &RiskSnapshot): u8 { s.recommended_action }
     public fun health_factor_x1000(s: &RiskSnapshot): u64 { s.health_factor_x1000 }
     public fun snapshot_at_ms(s: &RiskSnapshot): u64 { s.snapshot_at_ms }
-    public fun position_id(s: &RiskSnapshot): ID { s.position_id }
     public fun agent(s: &RiskSnapshot): address { s.agent }
 
     // Re-export reason code constants for PTB builders
-    public fun reason_low_health_factor(): u64  { REASON_LOW_HEALTH_FACTOR }
-    public fun reason_price_drop(): u64         { REASON_PRICE_DROP }
-    public fun reason_stale_oracle(): u64       { REASON_STALE_ORACLE }
-    public fun reason_low_liquidity(): u64      { REASON_LOW_LIQUIDITY }
-    public fun reason_high_volatility(): u64    { REASON_HIGH_VOLATILITY }
-    public fun reason_low_reserve(): u64        { REASON_LOW_RESERVE }
+    public fun reason_low_health_factor(): u64 { REASON_LOW_HEALTH_FACTOR }
+    public fun reason_price_drop(): u64        { REASON_PRICE_DROP }
+    public fun reason_stale_oracle(): u64      { REASON_STALE_ORACLE }
+    public fun reason_low_liquidity(): u64     { REASON_LOW_LIQUIDITY }
+    public fun reason_high_volatility(): u64   { REASON_HIGH_VOLATILITY }
+    public fun reason_low_reserve(): u64       { REASON_LOW_RESERVE }
 }

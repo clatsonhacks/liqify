@@ -1,29 +1,37 @@
-/// Capability objects that authorize LiquidShield guardian actions.
-/// GuardianCap is transferred to the agent keypair; DAOOverrideCap to the admin.
+/// Shared delegation object that the owner fully controls.
+/// Replaces the old transferred GuardianCap: because this object is shared,
+/// the owner can revoke it at any time without needing the agent to co-sign.
 module liquidshield::guardian_cap {
     use sui::object::{Self, UID, ID};
     use sui::tx_context::{Self, TxContext};
     use sui::transfer;
     use sui::event;
+    use sui::clock::{Self, Clock};
 
     // ═══════════════════════════════════════════════
     // Structs
     // ═══════════════════════════════════════════════
 
-    /// Held by the guardian agent address. Authorizes bounded rescue actions
-    /// on behalf of `protected_owner`. Must be paired with a valid RiskPolicy.
-    public struct GuardianCap has key, store {
+    /// Shared so the owner can mutate (revoke) directly and the agent can read
+    /// it without the user cosigning rescue PTBs.
+    public struct GuardianDelegation has key {
         id: UID,
-        /// User who granted this capability
-        protected_owner: address,
-        /// Unix epoch ms — agent cannot act after this
+        /// User who created this delegation
+        owner: address,
+        /// The guardian agent keypair address authorized to act
+        agent: address,
+        /// Must match the RiskPolicy used in each rescue PTB
+        policy_id: ID,
+        /// Agent cannot act after this timestamp (ms)
         expires_at_ms: u64,
-        /// Set to true by revoke(); blocks all future agent actions
+        /// Set to true by revoke_delegation(); permanently blocks agent
         revoked: bool,
+        /// Incremented on each revocation for off-chain event ordering
+        nonce: u64,
     }
 
-    /// Held by DAO/admin. Can pause or force-revoke any RiskPolicy.
-    /// One cap minted at package publish; transfer to multisig for production.
+    /// Held by DAO/admin. One minted at package publish; transfer to multisig
+    /// for production. Used by risk_policy dao_pause / dao_revoke.
     public struct DAOOverrideCap has key, store {
         id: UID,
     }
@@ -32,16 +40,18 @@ module liquidshield::guardian_cap {
     // Events
     // ═══════════════════════════════════════════════
 
-    public struct GuardianCapMintedEvent has copy, drop {
-        cap_id: ID,
-        protected_owner: address,
-        agent_address: address,
+    public struct DelegationCreatedEvent has copy, drop {
+        delegation_id: ID,
+        owner: address,
+        agent: address,
+        policy_id: ID,
         expires_at_ms: u64,
     }
 
-    public struct GuardianCapRevokedEvent has copy, drop {
-        cap_id: ID,
-        protected_owner: address,
+    public struct DelegationRevokedEvent has copy, drop {
+        delegation_id: ID,
+        owner: address,
+        nonce: u64,
     }
 
     // ═══════════════════════════════════════════════
@@ -49,64 +59,91 @@ module liquidshield::guardian_cap {
     // ═══════════════════════════════════════════════
 
     const E_NOT_OWNER: u64 = 1;
-    const E_CAP_REVOKED: u64 = 2;
-    const E_CAP_EXPIRED: u64 = 3;
+    const E_DELEGATION_REVOKED: u64 = 2;
+    const E_DELEGATION_EXPIRED: u64 = 3;
+    const E_NOT_AGENT: u64 = 4;
+    const E_POLICY_MISMATCH: u64 = 5;
 
     // ═══════════════════════════════════════════════
-    // Public functions
+    // Entry — user setup
     // ═══════════════════════════════════════════════
 
-    /// User creates a GuardianCap and transfers it to the guardian agent.
-    /// Call once per user during onboarding.
-    public entry fun mint_and_transfer_guardian_cap(
-        agent_address: address,
+    /// User creates a shared delegation granting `agent` bounded rescue rights.
+    /// `policy_id` is the ID of the RiskPolicy shared object that must accompany
+    /// every rescue PTB — binding delegation to a specific policy.
+    public entry fun create_delegation(
+        agent: address,
+        policy_id: ID,
         expires_at_ms: u64,
         ctx: &mut TxContext,
     ) {
-        let sender = tx_context::sender(ctx);
-        let cap = GuardianCap {
+        let owner = tx_context::sender(ctx);
+        let d = GuardianDelegation {
             id: object::new(ctx),
-            protected_owner: sender,
+            owner,
+            agent,
+            policy_id,
             expires_at_ms,
             revoked: false,
+            nonce: 0,
         };
-        event::emit(GuardianCapMintedEvent {
-            cap_id: object::id(&cap),
-            protected_owner: sender,
-            agent_address,
+        event::emit(DelegationCreatedEvent {
+            delegation_id: object::id(&d),
+            owner,
+            agent,
+            policy_id,
             expires_at_ms,
         });
-        transfer::transfer(cap, agent_address);
+        transfer::share_object(d);
     }
 
-    /// User calls this to permanently disable the agent.
-    /// The cap object is burned; no further rescue can be authorized.
-    public entry fun revoke_guardian_cap(
-        cap: GuardianCap,
+    /// Owner permanently disables the agent by flipping `revoked = true`.
+    /// No cap object needed — owner address check suffices on a shared object.
+    public entry fun revoke_delegation(
+        d: &mut GuardianDelegation,
         ctx: &mut TxContext,
     ) {
-        assert!(cap.protected_owner == tx_context::sender(ctx), E_NOT_OWNER);
-        event::emit(GuardianCapRevokedEvent {
-            cap_id: object::id(&cap),
-            protected_owner: cap.protected_owner,
+        assert!(d.owner == tx_context::sender(ctx), E_NOT_OWNER);
+        d.revoked = true;
+        d.nonce = d.nonce + 1;
+        event::emit(DelegationRevokedEvent {
+            delegation_id: object::id(d),
+            owner: d.owner,
+            nonce: d.nonce,
         });
-        let GuardianCap { id, protected_owner: _, expires_at_ms: _, revoked: _ } = cap;
-        object::delete(id);
     }
 
-    /// Called by the agent in every PTB to validate the cap before acting.
-    public fun assert_valid(cap: &GuardianCap, now_ms: u64) {
-        assert!(!cap.revoked, E_CAP_REVOKED);
-        assert!(now_ms < cap.expires_at_ms, E_CAP_EXPIRED);
+    // ═══════════════════════════════════════════════
+    // Guard — called by executor before every rescue
+    // ═══════════════════════════════════════════════
+
+    /// Asserts:
+    ///   1. tx sender is the authorized agent
+    ///   2. delegation has not been revoked
+    ///   3. current time is before the expiry
+    ///   4. delegation policy_id matches the policy object used in this PTB
+    public fun assert_valid(
+        d: &GuardianDelegation,
+        policy_id: ID,
+        clock: &Clock,
+        ctx: &TxContext,
+    ) {
+        assert!(d.agent == tx_context::sender(ctx), E_NOT_AGENT);
+        assert!(!d.revoked, E_DELEGATION_REVOKED);
+        assert!(clock::timestamp_ms(clock) < d.expires_at_ms, E_DELEGATION_EXPIRED);
+        assert!(d.policy_id == policy_id, E_POLICY_MISMATCH);
     }
 
     // ═══════════════════════════════════════════════
     // Accessors
     // ═══════════════════════════════════════════════
 
-    public fun protected_owner(cap: &GuardianCap): address { cap.protected_owner }
-    public fun expires_at_ms(cap: &GuardianCap): u64 { cap.expires_at_ms }
-    public fun is_revoked(cap: &GuardianCap): bool { cap.revoked }
+    public fun delegation_owner(d: &GuardianDelegation): address { d.owner }
+    public fun delegation_agent(d: &GuardianDelegation): address { d.agent }
+    public fun delegation_policy_id(d: &GuardianDelegation): ID { d.policy_id }
+    public fun delegation_expires_at_ms(d: &GuardianDelegation): u64 { d.expires_at_ms }
+    public fun is_revoked(d: &GuardianDelegation): bool { d.revoked }
+    public fun nonce(d: &GuardianDelegation): u64 { d.nonce }
 
     // ═══════════════════════════════════════════════
     // Init — creates the one DAOOverrideCap at publish
@@ -115,5 +152,10 @@ module liquidshield::guardian_cap {
     fun init(ctx: &mut TxContext) {
         let dao_cap = DAOOverrideCap { id: object::new(ctx) };
         transfer::transfer(dao_cap, tx_context::sender(ctx));
+    }
+
+    #[test_only]
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx);
     }
 }
