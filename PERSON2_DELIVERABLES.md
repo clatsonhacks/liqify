@@ -27,7 +27,9 @@ response shapes, realtime stream, Cube access, and what's still pending for main
 | 20 | Concurrency/idempotency locks (`execution_locks`) | locked tick **skipped** (no double-rescue) |
 | 21 | Monitoring (`GET /api/system/health`) + alerts + freshness gate | live metrics; stalled-indexer/stale-oracle → rescue blocked |
 
-> Scallop-intelligence items (1,2,14,16) verified against **mainnet** Scallop (only place it exists); execution items (9,19,20,21) against the **demo Scallop** on testnet. Full agent-rescue regression passes with all 8 active.
+> **Verification environments (expected, by design):** Scallop-intelligence items (1,2,14,16) were verified against **mainnet** Scallop — the only network it's deployed on. Execution items (9,19,20,21) were verified against the **demo Scallop** on testnet (real Scallop is mainnet-only, so a testnet stand-in is required to exercise the rescue PTB). Full agent-rescue regression passes with all 8 active.
+>
+> **`before_health_factor` / `after_health_factor` (#9):** these populate from the Scallop SDK and therefore only on a **real mainnet Scallop obligation**. On the testnet demo Scallop, `readObligationState` falls back to the obligation object's on-chain `debt` field, so verification works via **debt-decrease** (`result_verified=1` when debt drops) — the HF columns stay null but the rescue is still verified. With a real mainnet obligation, the HF columns fill in.
 >
 > **On-chain (Move) production items are Person 1's** — see `CLATSON_TODO.md` (#5 shared registry, #6 GuardianDelegation, #7 consistency checks, #8 strict Scallop adapters, #23/#24 tests).
 
