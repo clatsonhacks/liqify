@@ -37,12 +37,13 @@ export class RiskAgent {
    * @param {object} [opts.realtimeHub]   SeFi RealtimeHub (optional)
    * @param {function} [opts.logger]
    */
-  constructor({ database, lsConfig, deriver, scallopReader = null, alerter = null, realtimeHub = null, logger = () => {} }) {
+  constructor({ database, lsConfig, deriver, scallopReader = null, alerter = null, suiIndexer = null, realtimeHub = null, logger = () => {} }) {
     this.database = database;
     this.lsConfig = lsConfig;
     this.deriver = deriver;
     this.scallopReader = scallopReader; // #9 pre/post obligation reads
     this.alerter = alerter;             // #21 alerts (optional)
+    this.suiIndexer = suiIndexer;       // #21 freshness gate (indexer lag)
     this.realtimeHub = realtimeHub;
     this.logger = logger;
 
@@ -114,6 +115,24 @@ export class RiskAgent {
       if (f && f.debt != null) return { healthFactor: null, riskLevel: null, debt: Number(f.debt) };
     } catch { /* ignore */ }
     return null;
+  }
+
+  /**
+   * #21 — fail-closed freshness gate: never execute on stale data.
+   * Blocks if the price oracle is too old OR the Sui indexer is lagging beyond budget.
+   */
+  freshnessGate(market) {
+    const oracleAge = market?.oracle_age_ms;
+    if (Number.isFinite(oracleAge) && oracleAge > this.lsConfig.maxSnapshotAgeMs) {
+      return { ok: false, reason: `stale oracle (${oracleAge}ms > ${this.lsConfig.maxSnapshotAgeMs}ms)` };
+    }
+    try {
+      const src = this.suiIndexer?.getStatus?.().sources?.find((s) => s.key === 'liquidshield');
+      if (src && Number.isFinite(src.lag_ms) && src.lag_ms > this.lsConfig.indexerLagBudgetMs) {
+        return { ok: false, reason: `indexer lag (${src.lag_ms}ms > ${this.lsConfig.indexerLagBudgetMs}ms)` };
+      }
+    } catch { /* indexer status optional */ }
+    return { ok: true };
   }
 
   /** "Did the rescue improve the position?" HF up OR debt down. null = can't tell. */
@@ -343,6 +362,15 @@ export class RiskAgent {
       return { position_id: position.id, score: scoreResult.score, executed: false, blocked: 'policy' };
     }
 
+    // #21 — fail-closed freshness gate (never act on stale data)
+    const fresh = this.freshnessGate(market);
+    if (!fresh.ok) {
+      this.recordAction(position, { status: 'blocked', reason: fresh.reason, riskBefore: scoreResult.score, tsIso });
+      this.publish('shield_blocked', { position_id: position.id, reason: fresh.reason });
+      this.alerter?.notify?.('stale_data_block', { position_id: position.id, reason: fresh.reason });
+      return { position_id: position.id, score: scoreResult.score, executed: false, blocked: 'stale' };
+    }
+
     // #20 — one rescue in flight per obligation (idempotency / no double-rescue)
     const lockKey = position.obligation_id || position.id;
     if (!this.acquireLock(lockKey)) {
@@ -536,6 +564,8 @@ export class RiskAgent {
       last_tick_at: this.lastTickAt,
       last_tick: this.lastTickSummary,
       active_stress: Array.from(this.stress.entries()).map(([id, s]) => ({ position_id: id, ...s })),
+      scallop_read_failures: this.scallopReadFailures,
+      disabled_positions: Array.from(this.disabledPositions),
     };
   }
 }

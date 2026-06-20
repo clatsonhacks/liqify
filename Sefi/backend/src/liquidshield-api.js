@@ -22,6 +22,7 @@ import { ScallopReader } from './scallop-reader.js';
 import { ScallopDeriver } from './scallop-deriver.js';
 import { ScallopDiscovery } from './scallop-discovery.js';
 import { ScallopReconciler } from './scallop-reconciler.js';
+import { Alerter } from './alerter.js';
 import { LiquidShieldDeriver } from './liquidshield-deriver.js';
 import { RiskAgent } from './risk-agent.js';
 
@@ -68,7 +69,8 @@ export async function bootstrapLiquifi({ database, realtimeHub, logger = () => {
   const deriver = new LiquidShieldDeriver({ database, lsConfig, scallopReader, logger });
   const scallopDeriver = new ScallopDeriver({ database, logger });
   const scallopReconciler = new ScallopReconciler({ database, scallopReader, lsConfig, logger });
-  const riskAgent = new RiskAgent({ database, lsConfig, deriver, scallopReader, realtimeHub, logger });
+  const alerter = new Alerter({ cfg: lsConfig, logger });
+  const riskAgent = new RiskAgent({ database, lsConfig, deriver, scallopReader, alerter, suiIndexer, realtimeHub, logger });
 
   // Start loops (don't block server startup on a slow first poll).
   suiIndexer.start().catch((e) => logger('warn', 'sui_indexer_start_failed', { error: String(e?.message || e) }));
@@ -87,12 +89,56 @@ export async function bootstrapLiquifi({ database, realtimeHub, logger = () => {
   const readiness = liquifiReadiness(lsConfig);
   logger('info', 'liquifi_bootstrapped', { ready: readiness.ready, missing: readiness.missing });
 
-  return { lsConfig, suiClient, suiIndexer, scallopReader, scallopDiscovery, deriver, scallopDeriver, scallopReconciler, riskAgent, database, realtimeHub };
+  return { lsConfig, suiClient, suiIndexer, scallopReader, scallopDiscovery, deriver, scallopDeriver, scallopReconciler, alerter, riskAgent, database, realtimeHub };
 }
 
 /** Mount the frontend-facing /api/* routes. */
 export function registerLiquidShieldRoutes(app, ctx) {
   const { database, lsConfig, suiIndexer, riskAgent, realtimeHub, scallopDiscovery } = ctx;
+
+  // ── GET /api/system/health — ops monitoring (#21) ──
+  app.get('/api/system/health', asyncRoute(async (_req, res) => {
+    const idx = suiIndexer.getStatus();
+    const agent = riskAgent.getStatus();
+    const market = latestMarket();
+    const lsSrc = idx.sources?.find((s) => s.key === 'liquidshield');
+    const actions = database.queryOne(
+      `SELECT
+         SUM(CASE WHEN status IN ('failed','blocked') THEN 1 ELSE 0 END) AS bad,
+         COUNT(*) AS total
+       FROM risk_actions WHERE timestamp > ?`,
+      [new Date(Date.now() - 24 * 3600 * 1000).toISOString()]
+    );
+    const nearLiq = database.queryOne(
+      `SELECT COUNT(*) c FROM positions WHERE health_factor IS NOT NULL AND health_factor < ?`,
+      [lsConfig.minHealthFactor]
+    )?.c ?? 0;
+    const lastScallop = database.queryOne(
+      `SELECT MAX(ts) m FROM (
+         SELECT MAX(timestamp) ts FROM scallop_repay_events
+         UNION ALL SELECT MAX(timestamp) FROM scallop_borrow_events
+         UNION ALL SELECT MAX(timestamp) FROM scallop_collateral_deposit_events)`
+    )?.m ?? null;
+    const failedPtbRate = actions?.total ? Number((actions.bad / actions.total).toFixed(3)) : 0;
+    const indexerLagMs = lsSrc?.lag_ms ?? null;
+    const oracleAgeMs = market?.oracle_age_ms ?? null;
+
+    res.json({
+      ok: agent.running && idx.running,
+      indexer_lag_ms: indexerLagMs,
+      indexer_lag_unsafe: Number.isFinite(indexerLagMs) && indexerLagMs > lsConfig.indexerLagBudgetMs,
+      oracle_age_ms: oracleAgeMs,
+      oracle_stale: Number.isFinite(oracleAgeMs) && oracleAgeMs > lsConfig.maxSnapshotAgeMs,
+      deepbook_ok: market?.liquidity_score != null,
+      agent_ok: agent.running,
+      scallop_read_failures: agent.scallop_read_failures,
+      disabled_positions: agent.disabled_positions,
+      failed_ptb_rate_24h: failedPtbRate,
+      positions_near_liquidation: nearLiq,
+      last_scallop_event_at: lastScallop,
+      events_total: idx.events_total,
+    });
+  }));
 
   // ── GET /api/scallop/positions?owner=0x… — wallet-based obligation discovery (#1) ──
   app.get('/api/scallop/positions', asyncRoute(async (req, res) => {
