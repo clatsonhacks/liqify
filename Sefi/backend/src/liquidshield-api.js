@@ -21,6 +21,7 @@ import { SuiIndexer } from './sui-indexer.js';
 import { ScallopReader } from './scallop-reader.js';
 import { ScallopDeriver } from './scallop-deriver.js';
 import { ScallopDiscovery } from './scallop-discovery.js';
+import { ScallopReconciler } from './scallop-reconciler.js';
 import { LiquidShieldDeriver } from './liquidshield-deriver.js';
 import { RiskAgent } from './risk-agent.js';
 
@@ -66,6 +67,7 @@ export async function bootstrapLiquifi({ database, realtimeHub, logger = () => {
   const scallopDiscovery = new ScallopDiscovery(lsConfig);
   const deriver = new LiquidShieldDeriver({ database, lsConfig, scallopReader, logger });
   const scallopDeriver = new ScallopDeriver({ database, logger });
+  const scallopReconciler = new ScallopReconciler({ database, scallopReader, lsConfig, logger });
   const riskAgent = new RiskAgent({ database, lsConfig, deriver, realtimeHub, logger });
 
   // Start loops (don't block server startup on a slow first poll).
@@ -76,11 +78,16 @@ export async function bootstrapLiquifi({ database, realtimeHub, logger = () => {
     try { scallopDeriver.run(); } catch (e) { logger('warn', 'scallop_derive_failed', { error: String(e?.message || e) }); }
   }, lsConfig.indexPollMs);
   scallopDeriveTimer.unref?.();
+  // Live protocol-state reconciliation (#14): SDK reads -> trusted obligation snapshots.
+  const reconcileTimer = setInterval(() => {
+    scallopReconciler.run().catch((e) => logger('warn', 'reconcile_loop_failed', { error: String(e?.message || e) }));
+  }, Math.max(lsConfig.indexPollMs * 3, 30_000));
+  reconcileTimer.unref?.();
 
   const readiness = liquifiReadiness(lsConfig);
   logger('info', 'liquifi_bootstrapped', { ready: readiness.ready, missing: readiness.missing });
 
-  return { lsConfig, suiClient, suiIndexer, scallopReader, scallopDiscovery, deriver, scallopDeriver, riskAgent, database, realtimeHub };
+  return { lsConfig, suiClient, suiIndexer, scallopReader, scallopDiscovery, deriver, scallopDeriver, scallopReconciler, riskAgent, database, realtimeHub };
 }
 
 /** Mount the frontend-facing /api/* routes. */
