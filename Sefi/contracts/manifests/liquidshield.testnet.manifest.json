@@ -40,8 +40,14 @@
       "role": "monitor-rescue-target",
       "packageEnv": "SCALLOP_PACKAGE_ID",
       "package": "0xd971609b7feb6230585831e7aeb3c121fb21b9431337a30fc99185eb459a05ee",
-      "modules": ["borrow", "repay", "deposit_collateral", "liquidation"],
-      "events": []
+      "modules": ["borrow", "repay", "deposit_collateral", "withdraw_collateral", "liquidate"],
+      "events": [
+        "borrow::BorrowEventV3",
+        "repay::RepayEvent",
+        "deposit_collateral::CollateralDepositEvent",
+        "withdraw_collateral::CollateralWithdrawEvent",
+        "liquidate::LiquidateEventV2"
+      ]
     },
     {
       "key": "scallop-mainnet",

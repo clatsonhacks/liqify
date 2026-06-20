@@ -19,6 +19,7 @@ import { createLiquifiConfig, liquifiReadiness } from './liquidshield-config.js'
 import { SuiClient } from './sui-client.js';
 import { SuiIndexer } from './sui-indexer.js';
 import { ScallopReader } from './scallop-reader.js';
+import { ScallopDeriver } from './scallop-deriver.js';
 import { LiquidShieldDeriver } from './liquidshield-deriver.js';
 import { RiskAgent } from './risk-agent.js';
 
@@ -62,16 +63,22 @@ export async function bootstrapLiquifi({ database, realtimeHub, logger = () => {
 
   const scallopReader = new ScallopReader(lsConfig);
   const deriver = new LiquidShieldDeriver({ database, lsConfig, scallopReader, logger });
+  const scallopDeriver = new ScallopDeriver({ database, logger });
   const riskAgent = new RiskAgent({ database, lsConfig, deriver, realtimeHub, logger });
 
   // Start loops (don't block server startup on a slow first poll).
   suiIndexer.start().catch((e) => logger('warn', 'sui_indexer_start_failed', { error: String(e?.message || e) }));
   riskAgent.start();
+  // Typed Scallop semantic indexing: decode new raw Scallop events into typed tables every cycle.
+  const scallopDeriveTimer = setInterval(() => {
+    try { scallopDeriver.run(); } catch (e) { logger('warn', 'scallop_derive_failed', { error: String(e?.message || e) }); }
+  }, lsConfig.indexPollMs);
+  scallopDeriveTimer.unref?.();
 
   const readiness = liquifiReadiness(lsConfig);
   logger('info', 'liquifi_bootstrapped', { ready: readiness.ready, missing: readiness.missing });
 
-  return { lsConfig, suiClient, suiIndexer, scallopReader, deriver, riskAgent, database, realtimeHub };
+  return { lsConfig, suiClient, suiIndexer, scallopReader, deriver, scallopDeriver, riskAgent, database, realtimeHub };
 }
 
 /** Mount the frontend-facing /api/* routes. */

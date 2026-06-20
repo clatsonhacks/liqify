@@ -86,7 +86,126 @@ export const TABLE_SHAPES = {
       { name: 'reason', type: 'TEXT' },
       { name: 'risk_before', type: 'INTEGER' },
       { name: 'risk_after', type: 'INTEGER' },
+      // #9 pre/post-execution verification
+      { name: 'before_health_factor', type: 'REAL' },
+      { name: 'after_health_factor', type: 'REAL' },
+      { name: 'before_risk_level', type: 'TEXT' },
+      { name: 'after_risk_level', type: 'TEXT' },
+      { name: 'simulation_digest', type: 'TEXT' },
+      { name: 'result_verified', type: 'INTEGER' }, // 1 = post-state confirmed improved
       { name: 'timestamp', type: 'TEXT' },
+    ],
+  },
+
+  // ── #20 concurrency / idempotency ──────────────────────────────────────────
+  execution_locks: {
+    keyColumns: ['key'],
+    columns: [
+      { name: 'key', type: 'TEXT', primary_key: true }, // idempotency key (obligation_id:nonce)
+      { name: 'obligation_id', type: 'TEXT' },
+      { name: 'locked_until', type: 'INTEGER' }, // epoch ms
+      { name: 'tx_digest', type: 'TEXT' },
+      { name: 'status', type: 'TEXT' }, // locked | done | failed
+    ],
+  },
+
+  // ── #2 typed Scallop event tables ──────────────────────────────────────────
+  scallop_borrow_events: {
+    keyColumns: ['id'],
+    columns: [
+      { name: 'id', type: 'TEXT', primary_key: true }, // tx_digest:log_index
+      { name: 'obligation_id', type: 'TEXT' },
+      { name: 'actor', type: 'TEXT' }, // borrower
+      { name: 'coin_type', type: 'TEXT' },
+      { name: 'symbol', type: 'TEXT' },
+      { name: 'amount', type: 'TEXT' }, // base units (string, can exceed JS int)
+      { name: 'tx_digest', type: 'TEXT' },
+      { name: 'timestamp', type: 'TEXT' },
+    ],
+  },
+  scallop_repay_events: {
+    keyColumns: ['id'],
+    columns: [
+      { name: 'id', type: 'TEXT', primary_key: true },
+      { name: 'obligation_id', type: 'TEXT' },
+      { name: 'actor', type: 'TEXT' }, // repayer
+      { name: 'coin_type', type: 'TEXT' },
+      { name: 'symbol', type: 'TEXT' },
+      { name: 'amount', type: 'TEXT' },
+      { name: 'tx_digest', type: 'TEXT' },
+      { name: 'timestamp', type: 'TEXT' },
+    ],
+  },
+  scallop_collateral_deposit_events: {
+    keyColumns: ['id'],
+    columns: [
+      { name: 'id', type: 'TEXT', primary_key: true },
+      { name: 'obligation_id', type: 'TEXT' },
+      { name: 'actor', type: 'TEXT' }, // provider
+      { name: 'coin_type', type: 'TEXT' },
+      { name: 'symbol', type: 'TEXT' },
+      { name: 'amount', type: 'TEXT' },
+      { name: 'tx_digest', type: 'TEXT' },
+      { name: 'timestamp', type: 'TEXT' },
+    ],
+  },
+  scallop_collateral_withdraw_events: {
+    keyColumns: ['id'],
+    columns: [
+      { name: 'id', type: 'TEXT', primary_key: true },
+      { name: 'obligation_id', type: 'TEXT' },
+      { name: 'actor', type: 'TEXT' }, // taker
+      { name: 'coin_type', type: 'TEXT' },
+      { name: 'symbol', type: 'TEXT' },
+      { name: 'amount', type: 'TEXT' },
+      { name: 'tx_digest', type: 'TEXT' },
+      { name: 'timestamp', type: 'TEXT' },
+    ],
+  },
+  scallop_liquidation_events: {
+    keyColumns: ['id'],
+    columns: [
+      { name: 'id', type: 'TEXT', primary_key: true },
+      { name: 'obligation_id', type: 'TEXT' },
+      { name: 'actor', type: 'TEXT' }, // liquidator
+      { name: 'debt_type', type: 'TEXT' },
+      { name: 'collateral_type', type: 'TEXT' },
+      { name: 'repay_amount', type: 'TEXT' },
+      { name: 'tx_digest', type: 'TEXT' },
+      { name: 'timestamp', type: 'TEXT' },
+    ],
+  },
+
+  // ── #2/#14 obligation state (latest + history) ─────────────────────────────
+  scallop_obligations: {
+    keyColumns: ['obligation_id'],
+    columns: [
+      { name: 'obligation_id', type: 'TEXT', primary_key: true },
+      { name: 'owner', type: 'TEXT' },
+      { name: 'obligation_key_id', type: 'TEXT' },
+      { name: 'total_collateral_usd', type: 'REAL' },
+      { name: 'total_debt_usd', type: 'REAL' },
+      { name: 'scallop_risk_level', type: 'REAL' },
+      { name: 'health_factor_like', type: 'REAL' },
+      { name: 'asset_breakdown_json', type: 'TEXT' },
+      { name: 'last_read_at', type: 'TEXT' },
+    ],
+  },
+  scallop_obligation_snapshots: {
+    keyColumns: ['id'],
+    columns: [
+      { name: 'id', type: 'TEXT', primary_key: true }, // obligation_id:ts_ms
+      { name: 'obligation_id', type: 'TEXT' },
+      { name: 'owner', type: 'TEXT' },
+      { name: 'collateral_value_usd', type: 'REAL' },
+      { name: 'debt_value_usd', type: 'REAL' },
+      { name: 'scallop_risk_level', type: 'REAL' },
+      { name: 'health_factor_like', type: 'REAL' },
+      { name: 'asset_breakdown_json', type: 'TEXT' },
+      { name: 'source_sdk_read_at', type: 'TEXT' },
+      { name: 'is_reconciled', type: 'INTEGER' },
+      { name: 'reconciliation_error', type: 'TEXT' },
+      { name: 'created_at', type: 'TEXT' },
     ],
   },
 };
