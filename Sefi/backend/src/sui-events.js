@@ -31,8 +31,9 @@ export function packageOf(typeRepr) {
 }
 
 /**
- * Move `vector<u8>` fields arrive as either a number array ([115,99,...]),
- * a comma string, or already-decoded text. Decode to utf8 best-effort.
+ * Move `vector<u8>` fields decode to utf8. Over the Sui GraphQL API they arrive as
+ * **base64** strings (e.g. "c2NhbGxvcA==" -> "scallop", "U1VJ" -> "SUI"); over JSON-RPC
+ * they may arrive as number arrays ([115,99,...]) or numeric csv. Handle all forms.
  */
 export function decodeByteVector(value) {
   if (value == null) return '';
@@ -44,12 +45,23 @@ export function decodeByteVector(value) {
     }
   }
   if (typeof value === 'string') {
+    // Move addresses/ids are 0x-hex, not byte vectors — leave untouched.
+    if (value.startsWith('0x')) return value;
     // numeric csv like "115,99,97..."
     if (/^\d+(,\d+)*$/.test(value)) {
       try {
         return Buffer.from(value.split(',').map((n) => Number(n) & 0xff)).toString('utf8');
       } catch {
         return value;
+      }
+    }
+    // base64 (GraphQL form): decode and accept if printable ASCII
+    if (/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+      try {
+        const decoded = Buffer.from(value, 'base64').toString('utf8');
+        if (decoded && /^[\x20-\x7e]+$/.test(decoded)) return decoded;
+      } catch {
+        /* fall through */
       }
     }
     return value;

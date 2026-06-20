@@ -99,7 +99,7 @@ export function createLiquifiConfig(runtimeEnv = process.env) {
     pythHermesUrl: str(env.PYTH_HERMES_URL, 'https://hermes.pyth.network'),
     pythPriceFeedId: str(env.PYTH_PRICE_FEED_ID),
     deepbookIndexerUrl: str(env.DEEPBOOK_INDEXER_URL, 'https://deepbook-indexer.testnet.mystenlabs.com'),
-    deepbookPoolName: str(env.DEEPBOOK_POOL_NAME, 'SUI_USDC'),
+    deepbookPoolName: str(env.DEEPBOOK_POOL_NAME, 'SUI_DBUSDC'),
 
     // ── Risk agent loop ─────────────────────────────────────────────────────────
     agentTickMs: parsePositiveInt(env.SEFI_AGENT_TICK_MS, 20000, 2000, 600000),
