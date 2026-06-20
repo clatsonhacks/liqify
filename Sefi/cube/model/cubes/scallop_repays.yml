@@ -1,0 +1,40 @@
+cubes:
+  - name: scallop_repays
+    sql_table: main.scallop_repay_events
+    data_source: default
+    joins: []
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+      - name: obligation_id
+        sql: obligation_id
+        type: string
+      - name: actor
+        sql: lower(actor)
+        type: string
+      - name: coin_type
+        sql: coin_type
+        type: string
+      - name: symbol
+        sql: symbol
+        type: string
+      - name: amount
+        sql: CAST(amount AS REAL)
+        type: number
+      - name: tx_digest
+        sql: tx_digest
+        type: string
+      - name: timestamp
+        sql: timestamp
+        type: time
+    measures:
+      - name: count
+        type: count
+      - name: total_amount
+        sql: CAST(amount AS REAL)
+        type: sum
+      - name: unique_obligations
+        sql: obligation_id
+        type: count_distinct

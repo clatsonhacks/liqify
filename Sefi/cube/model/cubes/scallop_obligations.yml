@@ -1,0 +1,44 @@
+cubes:
+  - name: scallop_obligations
+    sql_table: main.scallop_obligations
+    data_source: default
+    joins: []
+    dimensions:
+      - name: obligation_id
+        sql: obligation_id
+        type: string
+        primary_key: true
+      - name: owner
+        sql: lower(owner)
+        type: string
+      - name: total_collateral_usd
+        sql: CAST(total_collateral_usd AS REAL)
+        type: number
+      - name: total_debt_usd
+        sql: CAST(total_debt_usd AS REAL)
+        type: number
+      - name: scallop_risk_level
+        sql: CAST(scallop_risk_level AS REAL)
+        type: number
+      - name: health_factor_like
+        sql: CAST(health_factor_like AS REAL)
+        type: number
+      - name: last_read_at
+        sql: last_read_at
+        type: time
+    measures:
+      - name: count
+        type: count
+      - name: total_collateral
+        sql: CAST(total_collateral_usd AS REAL)
+        type: sum
+      - name: total_debt
+        sql: CAST(total_debt_usd AS REAL)
+        type: sum
+      - name: avg_risk_level
+        sql: CAST(scallop_risk_level AS REAL)
+        type: avg
+      - name: at_risk_count
+        type: count
+        filters:
+          - sql: "CAST({CUBE}.scallop_risk_level AS REAL) >= 0.85"

@@ -1,0 +1,42 @@
+cubes:
+  - name: scallop_obligation_snapshots
+    sql_table: main.scallop_obligation_snapshots
+    data_source: default
+    joins: []
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+      - name: obligation_id
+        sql: obligation_id
+        type: string
+      - name: collateral_value_usd
+        sql: CAST(collateral_value_usd AS REAL)
+        type: number
+      - name: debt_value_usd
+        sql: CAST(debt_value_usd AS REAL)
+        type: number
+      - name: scallop_risk_level
+        sql: CAST(scallop_risk_level AS REAL)
+        type: number
+      - name: health_factor_like
+        sql: CAST(health_factor_like AS REAL)
+        type: number
+      - name: is_reconciled
+        sql: CASE WHEN is_reconciled = 1 THEN 'true' ELSE 'false' END
+        type: boolean
+      - name: created_at
+        sql: created_at
+        type: time
+    measures:
+      - name: count
+        type: count
+      - name: reconciled_count
+        type: count
+        filters:
+          - sql: "{CUBE}.is_reconciled = 1"
+      - name: drift_count
+        type: count
+        filters:
+          - sql: "{CUBE}.is_reconciled = 0"

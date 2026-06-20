@@ -1,0 +1,40 @@
+cubes:
+  - name: scallop_liquidations
+    sql_table: main.scallop_liquidation_events
+    data_source: default
+    joins: []
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+      - name: obligation_id
+        sql: obligation_id
+        type: string
+      - name: actor
+        sql: lower(actor)
+        type: string
+      - name: debt_type
+        sql: debt_type
+        type: string
+      - name: collateral_type
+        sql: collateral_type
+        type: string
+      - name: repay_amount
+        sql: CAST(repay_amount AS REAL)
+        type: number
+      - name: tx_digest
+        sql: tx_digest
+        type: string
+      - name: timestamp
+        sql: timestamp
+        type: time
+    measures:
+      - name: count
+        type: count
+      - name: total_repay_amount
+        sql: CAST(repay_amount AS REAL)
+        type: sum
+      - name: unique_obligations
+        sql: obligation_id
+        type: count_distinct
