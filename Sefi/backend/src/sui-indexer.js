@@ -26,6 +26,24 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function eventOrdinal(cursor, fallback) {
+  try {
+    const decoded = JSON.parse(Buffer.from(String(cursor || ''), 'base64').toString('utf8'));
+    const ordinal = Number(decoded?.e);
+    if (Number.isInteger(ordinal) && ordinal >= 0) return ordinal;
+  } catch {
+    // Fall back to page-local order for non-standard cursors.
+  }
+  return fallback;
+}
+
+function dateKey(value) {
+  if (!value) return '';
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return '';
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
 export class SuiIndexer {
   /**
    * @param {object} opts
@@ -88,6 +106,7 @@ export class SuiIndexer {
     }
     const out = [];
     for (const src of manifest.sources || []) {
+      if (src.external === true) continue;
       // Optional env gate: source only active when its enabledEnv var === '1' (e.g. a
       // heavy mainnet backfill you opt into for a benchmark, off by default).
       if (src.enabledEnv && String(process.env[src.enabledEnv] || '') !== '1') {
@@ -100,13 +119,31 @@ export class SuiIndexer {
         continue;
       }
       const graphqlUrl = src.graphqlUrl ? String(src.graphqlUrl).trim() : (src.graphqlUrlEnv ? String(process.env[src.graphqlUrlEnv] || '').trim() : '');
-      out.push({ key: src.key, role: src.role, packageId, modules: src.modules || [], graphqlUrl: graphqlUrl || null });
+      const historyDays = Number.isFinite(Number(src.historyDays)) ? Math.max(0, Number(src.historyDays)) : 0;
+      const explicitHistoryStartDate = src.historyStartDate
+        ? dateKey(src.historyStartDate)
+        : (historyDays ? dateKey(this.lsConfig.protocolHistoryStartDate) : '');
+      out.push({
+        key: src.key,
+        role: src.role,
+        packageId,
+        modules: src.modules || [],
+        graphqlUrl: graphqlUrl || null,
+        historyDays,
+        historyStartDate: explicitHistoryStartDate,
+      });
     }
     return out;
   }
 
   syncKey(source) {
     return `sui:${source.key}`;
+  }
+
+  historySyncKey(source) {
+    return source.historyStartDate
+      ? `sui-history:${source.key}:${source.historyStartDate}`
+      : `sui-history:${source.key}`;
   }
 
   /** Register each source as a contract row so SeFi status/UI sees it. */
@@ -151,13 +188,11 @@ export class SuiIndexer {
       // Normalize once; assign a deterministic per-digest ordinal as log_index.
       const events = [];
       const rows = [];
-      let lastDigest = null;
-      let ordinal = 0;
       let lastTs = null;
-      for (const node of nodes) {
+      for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
+        const node = nodes[nodeIndex];
         const ev = normalizeEventNode(node, source.key);
-        if (ev.digest === lastDigest) ordinal += 1;
-        else { ordinal = 0; lastDigest = ev.digest; }
+        const ordinal = eventOrdinal(node.cursor, nodeIndex);
         events.push(ev);
         rows.push({
           contract_id: source.packageId,
@@ -205,11 +240,130 @@ export class SuiIndexer {
     return inserted;
   }
 
+  /**
+   * Resume a newest-to-oldest backfill until the configured cutoff is reached.
+   * The first page's end cursor becomes the live forward cursor after completion.
+   */
+  async backfillSource(source) {
+    if (!source.historyDays && !source.historyStartDate) return { inserted: 0, complete: true };
+
+    const syncId = this.historySyncKey(source);
+    const state = this.database.getSyncState(syncId);
+    if (Number(state?.last_index) === 1) return { inserted: 0, complete: true };
+
+    const client = this.clientFor(source);
+    const cutoff = source.historyStartDate
+      ? new Date(`${source.historyStartDate}T00:00:00.000Z`)
+      : new Date(Date.now() - source.historyDays * 24 * 60 * 60 * 1000);
+    let before = state?.last_tx_id || null;
+    let inserted = 0;
+    let complete = false;
+    let newestCursor = this.database.getSyncState(this.syncKey(source))?.last_tx_id || null;
+    let newestTimestamp = null;
+    let oldestTimestamp = state?.last_timestamp && state.last_timestamp !== '0.0'
+      ? state.last_timestamp
+      : null;
+
+    for (let page = 0; page < MAX_PAGES_PER_POLL && !this.shouldStop; page += 1) {
+      const result = await client.queryEventsBackward({
+        module: source.packageId,
+        before,
+        last: PAGE_SIZE,
+      });
+      const nodes = result.nodes || [];
+      if (nodes.length === 0) {
+        complete = true;
+        break;
+      }
+      if (!newestCursor) newestCursor = result.endCursor || null;
+
+      const rows = [];
+      for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
+        const node = nodes[nodeIndex];
+        const ev = normalizeEventNode(node, source.key);
+        const timestamp = ev.timestamp ? new Date(ev.timestamp) : null;
+        if (
+          ev.timestamp &&
+          (!newestTimestamp || new Date(ev.timestamp).getTime() > new Date(newestTimestamp).getTime())
+        ) {
+          newestTimestamp = ev.timestamp;
+        }
+        if (timestamp && timestamp < cutoff) {
+          complete = true;
+          continue;
+        }
+        rows.push({
+          contract_id: source.packageId,
+          tx_hash: ev.digest,
+          event_name: ev.eventName,
+          data: JSON.stringify(ev.json),
+          block_number: null,
+          log_index: eventOrdinal(node.cursor, nodeIndex),
+          timestamp: ev.timestamp,
+        });
+        if (
+          ev.timestamp &&
+          (!oldestTimestamp || new Date(ev.timestamp).getTime() < new Date(oldestTimestamp).getTime())
+        ) {
+          oldestTimestamp = ev.timestamp;
+        }
+      }
+
+      const insertedNow = this.database.insertContractLogs(rows);
+      inserted += insertedNow;
+      before = result.startCursor || before;
+
+      this.database.updateSyncState(syncId, 'sui_history', {
+        lastTimestamp: oldestTimestamp || undefined,
+        lastTxId: before,
+        lastIndex: complete ? 1 : 0,
+        incrementBy: insertedNow,
+      });
+
+      if (complete || !result.hasPreviousPage) {
+        complete = true;
+        break;
+      }
+    }
+
+    if (complete) {
+      this.database.updateSyncState(syncId, 'sui_history', {
+        lastTimestamp: oldestTimestamp || cutoff.toISOString(),
+        lastTxId: before,
+        lastIndex: 1,
+      });
+      if (!this.database.getSyncState(this.syncKey(source))?.last_tx_id && newestCursor) {
+        this.database.updateSyncState(this.syncKey(source), 'sui_package', {
+          lastTimestamp: newestTimestamp || undefined,
+          lastTxId: newestCursor,
+        });
+      }
+      this.database.logActivity(
+        'sui_history_complete',
+        source.key,
+        `Indexed ${source.historyStartDate || `${source.historyDays} days`} of ${source.key} history`
+      );
+    }
+
+    if (inserted > 0) {
+      this.logger('info', 'sui_history_indexed', {
+        key: source.key,
+        inserted,
+        cutoff: cutoff.toISOString(),
+        complete,
+      });
+    }
+    return { inserted, complete };
+  }
+
   /** One pass over all sources. */
   async pollOnce() {
     let total = 0;
     for (const source of this.sources) {
       if (this.shouldStop) break;
+      const history = await this.backfillSource(source);
+      total += history.inserted;
+      if (!history.complete) continue;
       total += await this.pollSource(source);
     }
     this.lastPollAt = new Date().toISOString();
@@ -262,6 +416,15 @@ export class SuiIndexer {
         events_total: Number(ss?.items_synced || 0),
         last_event_at: lastTs,
         lag_ms: lagMs,
+        history: (s.historyDays || s.historyStartDate)
+          ? {
+              days: s.historyDays,
+              start_date: s.historyStartDate || null,
+              complete: Number(this.database.getSyncState(this.historySyncKey(s))?.last_index) === 1,
+              events_total: Number(this.database.getSyncState(this.historySyncKey(s))?.items_synced || 0),
+              oldest_event_at: this.database.getSyncState(this.historySyncKey(s))?.last_timestamp || null,
+            }
+          : null,
       };
     });
     return {

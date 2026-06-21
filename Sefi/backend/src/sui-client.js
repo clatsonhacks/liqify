@@ -16,13 +16,33 @@ import { SuiGraphQLClient } from '@mysten/sui/graphql';
 const EVENTS_QUERY = `
   query LiquifiEvents($filter: EventFilter!, $first: Int!, $after: String) {
     events(filter: $filter, first: $first, after: $after) {
-      nodes {
-        contents { type { repr } json }
-        timestamp
-        sender { address }
-        transaction { digest }
+      edges {
+        cursor
+        node {
+          contents { type { repr } json }
+          timestamp
+          sender { address }
+          transaction { digest }
+        }
       }
       pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+const EVENTS_BACKWARD_QUERY = `
+  query LiquifiEventsBackward($filter: EventFilter!, $last: Int!, $before: String) {
+    events(filter: $filter, last: $last, before: $before) {
+      edges {
+        cursor
+        node {
+          contents { type { repr } json }
+          timestamp
+          sender { address }
+          transaction { digest }
+        }
+      }
+      pageInfo { hasPreviousPage startCursor endCursor }
     }
   }
 `;
@@ -75,9 +95,36 @@ export class SuiClient {
     }
     const ev = res.data?.events;
     return {
-      nodes: ev?.nodes ?? [],
+      nodes: (ev?.edges ?? []).map((edge) => ({ ...edge.node, cursor: edge.cursor })),
       endCursor: ev?.pageInfo?.endCursor ?? null,
       hasNextPage: Boolean(ev?.pageInfo?.hasNextPage),
+    };
+  }
+
+  /**
+   * Page events newest-to-oldest. Used for bounded historical backfills.
+   */
+  async queryEventsBackward({ module, type, before = null, last = 50 }) {
+    if (module && type) {
+      throw new Error('queryEventsBackward: `module` and `type` cannot be combined in one filter');
+    }
+    if (!module && !type) {
+      throw new Error('queryEventsBackward: provide either `module` or `type`');
+    }
+    const filter = module ? { module } : { type };
+    const res = await this.client.query({
+      query: EVENTS_BACKWARD_QUERY,
+      variables: { filter, last, before },
+    });
+    if (res.errors && res.errors.length > 0) {
+      throw new Error(`Sui GraphQL backward events error: ${JSON.stringify(res.errors).slice(0, 400)}`);
+    }
+    const ev = res.data?.events;
+    return {
+      nodes: (ev?.edges ?? []).map((edge) => ({ ...edge.node, cursor: edge.cursor })),
+      startCursor: ev?.pageInfo?.startCursor ?? null,
+      endCursor: ev?.pageInfo?.endCursor ?? null,
+      hasPreviousPage: Boolean(ev?.pageInfo?.hasPreviousPage),
     };
   }
 

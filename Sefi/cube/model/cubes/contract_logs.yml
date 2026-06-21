@@ -57,8 +57,10 @@ cubes:
       - name: timestamp
         sql: >-
           CASE
-            WHEN timestamp IS NULL OR timestamp = '' OR timestamp = '0.0' OR instr(timestamp, '.') = 0 THEN NULL
-            ELSE datetime(CAST(substr(timestamp, 1, instr(timestamp, '.') - 1) AS INTEGER), 'unixepoch')
+            WHEN timestamp IS NULL OR timestamp = '' OR timestamp = '0.0' THEN NULL
+            WHEN instr(timestamp, 'T') > 0 THEN datetime(timestamp)
+            WHEN instr(timestamp, '.') > 0 THEN datetime(CAST(substr(timestamp, 1, instr(timestamp, '.') - 1) AS INTEGER), 'unixepoch')
+            ELSE datetime(timestamp)
           END
         type: time
 

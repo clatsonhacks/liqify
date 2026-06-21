@@ -1,20 +1,91 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, FormEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import {
-  Activity, ArrowRight, BrainCircuit, Check, ChevronDown, CircleCheck,
-  Code2, Database, FileText, Gauge, Globe2, GraduationCap, Layers3,
-  LockKeyhole, Network, Paperclip, Search, Send, ShieldCheck, Sparkles,
+  Activity, ArrowRight, BarChart3, BrainCircuit, Check, ChevronDown, CircleCheck,
+  Database, Gauge, Layers3, LineChart,
+  Loader2, LockKeyhole, Network, Paperclip, Search, Send, ShieldCheck, Sparkles,
   Workflow, X, Zap,
 } from "lucide-react";
 import SeFiGlassShader from "./components/SeFiGlassShader";
 import { ShaderComponent } from "./components/ui/waves-shader";
 
+type ProtocolAnswer = {
+  request_id: string;
+  question: string;
+  answer: string;
+  confidence: number;
+  citations: Array<{ source: string; description: string }>;
+  window: { days: number; start: string; end: string };
+};
+
+type ProtocolIndexStatus = {
+  window_days: number;
+  scallop: {
+    running: boolean;
+    events_total: number;
+    sources: Array<{
+      key: string;
+      history?: {
+        start_date?: string | null;
+        complete?: boolean;
+        oldest_event_at?: string | null;
+        events_total?: number;
+      } | null;
+    }>;
+  };
+  deepbook: {
+    running: boolean;
+    history_start_date?: string | null;
+    detail_backfill_enabled: boolean;
+    storage_bytes?: number;
+    max_storage_bytes?: number;
+    counts: {
+      deepbook_pools: number;
+      deepbook_daily_volume: number;
+      deepbook_trades: number;
+      deepbook_order_updates: number;
+    };
+  };
+};
+
+const formatCompact = (value: number | undefined) => {
+  const safe = Number(value || 0);
+  if (safe >= 1_000_000) return `${(safe / 1_000_000).toFixed(safe >= 10_000_000 ? 0 : 1)}M`;
+  if (safe >= 1_000) return `${(safe / 1_000).toFixed(safe >= 10_000 ? 0 : 1)}K`;
+  return safe.toLocaleString();
+};
+
+const formatDate = (value?: string | null) => {
+  if (!value) return "syncing";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "syncing";
+  return date.toLocaleDateString("en", { month: "short", day: "numeric" });
+};
+
+const SEFI_API_BASE = process.env.NEXT_PUBLIC_SEFI_API_BASE || "http://localhost:3210";
+
 export default function Home() {
   const [activeLayer, setActiveLayer] = useState<"sefi" | "liquifi" | null>(null);
+  const [sefiPrompt, setSefiPrompt] = useState("");
+  const [sefiAnswers, setSefiAnswers] = useState<ProtocolAnswer[]>([]);
+  const [sefiLoading, setSefiLoading] = useState(false);
+  const [pendingQuestion, setPendingQuestion] = useState("");
+  const [sefiError, setSefiError] = useState("");
+  const [protocolStatus, setProtocolStatus] = useState<ProtocolIndexStatus | null>(null);
   const sefiOpen = activeLayer === "sefi";
   const liquifiOpen = activeLayer === "liquifi";
+  const latestAnswer = sefiAnswers[sefiAnswers.length - 1];
+  const scallopHistory = protocolStatus?.scallop.sources.find((source) => source.key === "scallop-mainnet")?.history;
+  const deepbookCounts = protocolStatus?.deepbook.counts;
+  const graphItems = [
+    { label: "Trades", value: deepbookCounts?.deepbook_trades || 0 },
+    { label: "Orders", value: deepbookCounts?.deepbook_order_updates || 0 },
+    { label: "Daily volume", value: deepbookCounts?.deepbook_daily_volume || 0 },
+    { label: "Scallop logs", value: protocolStatus?.scallop.events_total || 0 },
+  ];
+  const graphMax = Math.max(1, ...graphItems.map((item) => item.value));
 
   useEffect(() => {
     document.body.style.overflow = activeLayer ? "hidden" : "";
@@ -22,6 +93,40 @@ export default function Home() {
     window.addEventListener("keydown", onKey);
     return () => { document.body.style.overflow = ""; window.removeEventListener("keydown", onKey); };
   }, [activeLayer]);
+
+  useEffect(() => {
+    if (!sefiOpen) return;
+    let ignore = false;
+    let inFlight = false;
+    let statusController: AbortController | null = null;
+    const loadStatus = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      statusController = new AbortController();
+      const timeout = window.setTimeout(() => statusController?.abort(), 20000);
+      try {
+        const response = await fetch(`${SEFI_API_BASE}/api/protocol-index/status`, {
+          headers: { Accept: "application/json" },
+          signal: statusController.signal,
+        });
+        if (!response.ok) return;
+        const payload = await response.json() as ProtocolIndexStatus;
+        if (!ignore) setProtocolStatus(payload);
+      } catch {
+        // Status is a live enhancement; the chat remains usable when it is unavailable.
+      } finally {
+        window.clearTimeout(timeout);
+        inFlight = false;
+      }
+    };
+    loadStatus();
+    const timer = window.setInterval(loadStatus, 15000);
+    return () => {
+      ignore = true;
+      statusController?.abort();
+      window.clearInterval(timer);
+    };
+  }, [sefiOpen]);
 
   const moveLandingLock = (event: ReactPointerEvent<HTMLElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -38,6 +143,64 @@ export default function Home() {
     event.currentTarget.style.setProperty("--lock-y", "0px");
     event.currentTarget.style.setProperty("--lock-rx", "0deg");
     event.currentTarget.style.setProperty("--lock-ry", "0deg");
+  };
+
+  const askProtocolAgent = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const question = sefiPrompt.trim();
+    if (!question || sefiLoading) return;
+    // Smoothly transition into the loading state: empty the composer and surface
+    // the in-flight question in the conversation immediately, so the answer stage
+    // animates in with a thinking indicator before the response arrives.
+    setSefiLoading(true);
+    setSefiError("");
+    setPendingQuestion(question);
+    setSefiPrompt("");
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 120000);
+    try {
+      const response = await fetch(`${SEFI_API_BASE}/api/v1/agents/protocol-chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question }),
+        signal: controller.signal,
+      });
+      const contentType = response.headers.get("content-type") || "";
+      const payload = contentType.includes("application/json")
+        ? await response.json()
+        : { error: { message: await response.text() } };
+      if (!response.ok) {
+        const rawMessage = payload?.error?.message || "SeFi could not answer that question.";
+        const message = response.status >= 500 && rawMessage === "Internal Server Error"
+          ? "SeFi backend is unavailable. Start the backend on port 3210 and Cube on port 4100, then try again."
+          : rawMessage;
+        throw new Error(message);
+      }
+      setSefiAnswers((current) => [...current.slice(-2), payload as ProtocolAnswer]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "SeFi could not answer that question.";
+      setSefiError(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "SeFi is still working through the indexed data. Try again in a moment after the current query clears."
+          : message === "fetch failed"
+            ? "SeFi reached the backend, but the agent dependency failed before it could answer."
+            : message
+      );
+      // Restore the question so the user can retry without retyping.
+      setSefiPrompt(question);
+    } finally {
+      window.clearTimeout(timeout);
+      setPendingQuestion("");
+      setSefiLoading(false);
+    }
+  };
+
+  // Enter sends the prompt; Shift+Enter inserts a newline.
+  const onPromptKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
   };
 
   return (
@@ -65,59 +228,114 @@ export default function Home() {
       </section>
 
       <div className="sefiScrim" aria-hidden="true" onClick={() => setActiveLayer(null)}/>
-      <section className="sefiSheet" aria-hidden={!sefiOpen} aria-label="SeFi intelligence layer">
+      <section className="sefiSheet" aria-hidden={!sefiOpen} aria-label="SeFi protocol intelligence layer">
         <div className="sefiBackdrop" aria-hidden="true"><SeFiGlassShader active={sefiOpen}/><div className="sefiGlassVeil"/></div>
         <header className="sefiHeader">
           <button className="sefiBrand" onClick={() => setActiveLayer(null)} aria-label="Close SeFi"><span className="sefiMark"><i/><i/><b/></span><strong>SeFi</strong></button>
-          <nav><a href="#sefi-home">Home</a><a href="#features">Features</a><a href="#data">Data Layer</a><a href="#resources">Resources <ChevronDown size={15}/></a></nav>
+          <nav><a href="#sefi-home">Live index</a><a href="#features">Coverage</a><a href="#data">Semantic layer</a><a href="#resources">Ops <ChevronDown size={15}/></a></nav>
           <div className="sefiHeaderActions"><button className="sefiClose" onClick={() => setActiveLayer(null)} aria-label="Close"><X size={19}/></button><a href="#ask">Enter SeFi <ArrowRight size={17}/></a></div>
         </header>
 
-        <div className="sefiHero">
-          <div className="sefiAnnouncement"><Sparkles size={17}/>Experience verified intelligence for autonomous agents</div>
-          <h2>Build, reason, and act<br/>with <span className="sefiOrb" aria-hidden="true"><i/><b/></span> trusted data.</h2>
-          <p>Ask across markets, protocols, governance, and on-chain activity. SeFi turns millions of records into clear, attributable intelligence your agents can use.</p>
-          <div className="sefiModes"><button><BrainCircuit size={17}/>Brainstorm</button><button><Code2 size={17}/>Code</button><button><FileText size={17}/>Research</button><button><GraduationCap size={17}/>Advice</button><button>More</button></div>
-          <form id="ask" className="sefiAsk" onSubmit={(event) => event.preventDefault()}>
-            <label htmlFor="sefi-prompt">Ask anything</label><textarea id="sefi-prompt" placeholder="What is changing across Sui liquidity markets?"/>
-            <div><span><button type="button" aria-label="Attach"><Paperclip size={18}/></button><button type="button" aria-label="Browse sources"><Globe2 size={18}/></button></span><button type="submit" aria-label="Send"><Send size={19}/></button></div>
-          </form>
-          <div className="sefiProof"><p>Intelligence across the Sui ecosystem</p><div><strong>Scallop</strong><i/><strong>Suilend</strong><i/><strong>DeepBook</strong><i/><strong>Walrus</strong><i/><strong>Pyth</strong></div></div>
+        <div id="sefi-home" className={`sefiHero ${latestAnswer || sefiLoading ? "sefiHeroChat" : ""}`}>
+          <div className="sefiHeroCopy">
+            <div className="sefiAnnouncement"><Sparkles size={17}/>Live Scallop + DeepBook semantic index</div>
+            <h2>Ask the protocols<br/>while the index is <span className="sefiOrb" aria-hidden="true"><i/><b/></span> moving.</h2>
+            <p>SeFi answers from the local semantic layer: DeepBook pools, raw trades, order updates, daily volume, and Scallop lending events indexed from the configured history window.</p>
+            <div className="sefiLiveStrip" aria-label="Realtime indexed details">
+              <article><Database size={16}/><strong>{formatCompact(deepbookCounts?.deepbook_pools)}</strong><span>DeepBook pools</span></article>
+              <article><LineChart size={16}/><strong>{formatCompact(deepbookCounts?.deepbook_trades)}</strong><span>raw trades</span></article>
+              <article><BarChart3 size={16}/><strong>{formatCompact(deepbookCounts?.deepbook_order_updates)}</strong><span>order updates</span></article>
+              <article><Activity size={16}/><strong>{formatDate(scallopHistory?.oldest_event_at)}</strong><span>Scallop oldest</span></article>
+            </div>
+            <form id="ask" className="sefiAsk" onSubmit={askProtocolAgent}>
+              <label htmlFor="sefi-prompt">Ask the indexed Scallop + DeepBook data</label>
+              <textarea
+                id="sefi-prompt"
+                value={sefiPrompt}
+                onChange={(event) => setSefiPrompt(event.target.value)}
+                onKeyDown={onPromptKeyDown}
+                placeholder="Which DeepBook pool has the most order updates, or how many Scallop borrows are indexed?"
+                maxLength={2000}
+              />
+              <div><span><button type="button" aria-label="Attach"><Paperclip size={18}/></button></span><button type="submit" aria-label="Send" disabled={sefiLoading || !sefiPrompt.trim()}>{sefiLoading ? <Loader2 className="sefiSpinner" size={19}/> : <Send size={19}/>}</button></div>
+            </form>
+          </div>
+          {(latestAnswer || sefiError || sefiLoading) && (
+            <aside className="sefiAnswerStage" aria-live="polite">
+              <div className="sefiGraphPanel">
+                <header><span>Index shape</span><em>{protocolStatus?.deepbook.running || protocolStatus?.scallop.running ? "syncing" : "idle"}</em></header>
+                <div className="sefiGraphBars">
+                  {graphItems.map((item) => (
+                    <div key={item.label} style={{ "--bar": `${Math.max(7, (item.value / graphMax) * 100)}%` } as CSSProperties}>
+                      <span>{item.label}</span><i/><b>{formatCompact(item.value)}</b>
+                    </div>
+                  ))}
+                </div>
+                <footer>
+                  <span>Start {formatDate(protocolStatus?.deepbook.history_start_date)}</span>
+                  <span>{formatCompact(protocolStatus?.deepbook.storage_bytes)}B stored</span>
+                </footer>
+              </div>
+              <div className="sefiConversation">
+                {sefiAnswers.map((item) => (
+                  <article className="sefiAnswer" key={item.request_id}>
+                    <p className="sefiQuestion">{item.question}</p>
+                    <p>{item.answer}</p>
+                    <footer>
+                      <span>{Math.round(item.confidence * 100)}% confidence</span>
+                      <span>Since {formatDate(item.window.start)}</span>
+                      {item.citations.slice(0, 4).map((citation) => (
+                        <span title={citation.description} key={`${item.request_id}-${citation.source}`}>{citation.source}</span>
+                      ))}
+                    </footer>
+                  </article>
+                ))}
+                {sefiLoading && (
+                  <article className="sefiAnswer sefiAnswerPending">
+                    {pendingQuestion && <p className="sefiQuestion">{pendingQuestion}</p>}
+                    <p className="sefiThinking"><i/><i/><i/><span>Reading the indexed Scallop + DeepBook data…</span></p>
+                  </article>
+                )}
+                {sefiError && <p className="sefiChatError">{sefiError}</p>}
+              </div>
+            </aside>
+          )}
+          <div className="sefiProof"><p>Currently modeled protocols</p><div><strong>DeepBook</strong><i/><strong>Scallop</strong><i/><strong>Cube</strong><i/><strong>Sui GraphQL</strong></div></div>
         </div>
 
         <div className="sefiLanding">
           <section id="features" className="sefiSection sefiFeatureIntro">
             <div className="sefiSectionCopy">
-              <p className="sefiKicker">ONE INTELLIGENCE LAYER</p>
-              <h3>Every signal your agents need. Already connected.</h3>
-              <p>SeFi resolves fragmented market activity into one queryable knowledge layer—fresh, attributable, and structured for autonomous decisions.</p>
-              <a href="#data">Explore the data layer <ArrowRight size={16}/></a>
+              <p className="sefiKicker">CURRENT COVERAGE</p>
+              <h3>Protocol intelligence grounded in local indexed rows.</h3>
+              <p>The page now reflects what is actually indexed: DeepBook pool metadata, daily volume, raw trade/order windows, and Scallop lending activity from the configured package history.</p>
+              <a href="#data">Inspect semantic sources <ArrowRight size={16}/></a>
             </div>
             <div className="sefiNetworkCard" aria-label="Connected intelligence visualization">
-              <div className="sefiNetworkCore"><span className="sefiMark"><i/><i/><b/></span><strong>SeFi</strong><small>Knowledge graph</small></div>
-              {["Markets","Protocols","Governance","Research","On-chain","Risk"].map((label,index)=><span className={`sefiNode sefiNode${index+1}`} key={label}><i/>{label}</span>)}
+              <div className="sefiNetworkCore"><span className="sefiMark"><i/><i/><b/></span><strong>SeFi</strong><small>Semantic cube</small></div>
+              {["DeepBook pools","Raw trades","Orders","Scallop events","Daily volume","Citations"].map((label,index)=><span className={`sefiNode sefiNode${index+1}`} key={label}><i/>{label}</span>)}
               <svg viewBox="0 0 600 430" aria-hidden="true"><path d="M300 216L125 82M300 216L470 76M300 216L528 215M300 216L466 355M300 216L135 353M300 216L74 216"/></svg>
             </div>
           </section>
 
           <section className="sefiSection sefiCapabilityGrid" aria-label="SeFi capabilities">
-            <article><span><Search size={21}/></span><p>01 / DISCOVER</p><h4>Ask across millions of records.</h4><small>Natural-language discovery across protocols, markets, governance, and verified research.</small></article>
-            <article><span><Network size={21}/></span><p>02 / CONNECT</p><h4>See the context behind every move.</h4><small>Relationships, timelines, entities, and provenance arrive together—not as disconnected rows.</small></article>
-            <article><span><Workflow size={21}/></span><p>03 / ACT</p><h4>Ship intelligence into any agent.</h4><small>Consistent, structured outputs designed for tools, workflows, copilots, and autonomous systems.</small></article>
+            <article><span><Search size={21}/></span><p>01 / ASK</p><h4>Use normal protocol questions.</h4><small>The agent maps plain English into bounded Cube queries over Scallop and DeepBook models.</small></article>
+            <article><span><Network size={21}/></span><p>02 / VERIFY</p><h4>Every answer carries source context.</h4><small>Citations expose the semantic cube or table used, plus the window applied to the query.</small></article>
+            <article><span><Workflow size={21}/></span><p>03 / WATCH</p><h4>Index growth is visible on the page.</h4><small>Live widgets show pools, trades, order updates, Scallop progress, and storage growth.</small></article>
           </section>
 
           <section id="data" className="sefiSection sefiDataSection">
             <div className="sefiDataVisual">
-              <div className="sefiQueryLine"><span>query</span><code>liquidity shifts on Sui</code><i/></div>
-              <div className="sefiResultStack"><article><Database size={16}/><span><b>42,806</b><small>records resolved</small></span><em>0.18s</em></article><article><Layers3 size={16}/><span><b>18</b><small>sources connected</small></span><em>live</em></article><article><CircleCheck size={16}/><span><b>100%</b><small>attributable output</small></span><em>verified</em></article></div>
+              <div className="sefiQueryLine"><span>query</span><code>DeepBook order flow vs Scallop borrows</code><i/></div>
+              <div className="sefiResultStack"><article><Database size={16}/><span><b>{formatCompact(deepbookCounts?.deepbook_order_updates)}</b><small>order updates</small></span><em>raw</em></article><article><Layers3 size={16}/><span><b>{formatCompact(deepbookCounts?.deepbook_trades)}</b><small>trades indexed</small></span><em>live</em></article><article><CircleCheck size={16}/><span><b>{formatCompact(protocolStatus?.scallop.events_total)}</b><small>Scallop events</small></span><em>cited</em></article></div>
             </div>
-            <div className="sefiSectionCopy"><p className="sefiKicker">BUILT FOR TRUST</p><h3>Answers your agents can inspect.</h3><p>Every response carries its source trail. Your system can reason quickly without giving up the ability to verify what it knows.</p><ul><li><Check size={15}/>Source-level attribution</li><li><Check size={15}/>Continuously refreshed context</li><li><Check size={15}/>Agent-ready structured responses</li></ul></div>
+            <div className="sefiSectionCopy"><p className="sefiKicker">BUILT FOR TRUST</p><h3>Answers only from indexed evidence.</h3><p>If the semantic layer does not have the row, pool, package, or time range, the agent should say the data is not available rather than filling the gap.</p><ul><li><Check size={15}/>Cube semantic query first</li><li><Check size={15}/>Rolling and explicit time windows</li><li><Check size={15}/>Visible citation trail</li></ul></div>
           </section>
 
-          <section className="sefiSection sefiStats"><div><strong>18M+</strong><span>indexed records</span></div><div><strong>99.9%</strong><span>data availability</span></div><div><strong>&lt;200ms</strong><span>retrieval latency</span></div><div><strong>24/7</strong><span>continuous updates</span></div></section>
+          <section className="sefiSection sefiStats"><div><strong>{formatCompact(deepbookCounts?.deepbook_pools)}</strong><span>DeepBook pools</span></div><div><strong>{formatCompact(deepbookCounts?.deepbook_trades)}</strong><span>raw trades</span></div><div><strong>{formatCompact(deepbookCounts?.deepbook_order_updates)}</strong><span>order updates</span></div><div><strong>{formatDate(scallopHistory?.oldest_event_at)}</strong><span>Scallop backfill</span></div></section>
 
-          <section id="resources" className="sefiSection sefiFinalCta"><span className="sefiOrb" aria-hidden="true"><i/><b/></span><p className="sefiKicker">YOUR AGENTS, BETTER INFORMED</p><h3>Start with a question.<br/>Build from trusted answers.</h3><p>Connect your first agent to the intelligence layer powering the next generation of on-chain products.</p><a href="#ask">Enter SeFi <ArrowRight size={17}/></a></section>
-          <footer className="sefiFooter"><strong>SeFi</strong><span>Verified intelligence for autonomous systems.</span><small>© 2026 S² Labs</small></footer>
+          <section id="resources" className="sefiSection sefiFinalCta"><span className="sefiOrb" aria-hidden="true"><i/><b/></span><p className="sefiKicker">QUERY THE LIVE BACKFILL</p><h3>Ask what the index knows.<br/>See the evidence immediately.</h3><p>Use SeFi for grounded questions about DeepBook pools and Scallop lending events while the Jan 1 raw backfill continues.</p><a href="#ask">Ask the index <ArrowRight size={17}/></a></section>
+          <footer className="sefiFooter"><strong>SeFi</strong><span>Local semantic intelligence for Scallop and DeepBook.</span><small>© 2026 S² Labs</small></footer>
         </div>
       </section>
 

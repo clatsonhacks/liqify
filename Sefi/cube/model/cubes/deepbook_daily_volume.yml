@@ -1,0 +1,52 @@
+cubes:
+  - name: deepbook_daily_volume
+    sql_table: main.deepbook_daily_volume
+    data_source: default
+    joins:
+      - name: deepbook_pools
+        sql: "{CUBE.pool_id} = {deepbook_pools.pool_id}"
+        relationship: many_to_one
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+      - name: pool_id
+        sql: pool_id
+        type: string
+      - name: pool_name
+        sql: pool_name
+        type: string
+      - name: base_asset_symbol
+        sql: base_asset_symbol
+        type: string
+      - name: quote_asset_symbol
+        sql: quote_asset_symbol
+        type: string
+      - name: daily_base_volume
+        sql: base_volume
+        type: number
+      - name: daily_quote_volume
+        sql: quote_volume
+        type: number
+      - name: window_start
+        sql: window_start
+        type: time
+      - name: window_end
+        sql: window_end
+        type: time
+    measures:
+      - name: count
+        type: count
+      - name: base_volume
+        sql: base_volume
+        type: sum
+      - name: quote_volume
+        sql: quote_volume
+        type: sum
+      - name: average_daily_base_volume
+        sql: base_volume
+        type: avg
+      - name: average_daily_quote_volume
+        sql: quote_volume
+        type: avg

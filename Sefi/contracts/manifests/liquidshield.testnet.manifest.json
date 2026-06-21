@@ -51,13 +51,13 @@
     },
     {
       "key": "scallop-mainnet",
-      "role": "benchmark",
-      "enabledEnv": "SCALLOP_MAINNET_BENCH",
+      "role": "protocol-intelligence",
       "graphqlUrl": "https://graphql.mainnet.sui.io/graphql",
       "package": "0xde5c09ad171544aa3724dc67216668c80e754860f419136a68d78504eb2e2805",
+      "historyStartDate": "2026-01-01",
       "modules": ["borrow", "repay", "deposit_collateral", "withdraw_collateral", "liquidation"],
       "events": [],
-      "note": "OPT-IN benchmark only (set SCALLOP_MAINNET_BENCH=1). Indexes real Scallop MAINNET lending events into SeFi to watch indexing speed in the FE. Off by default (full history is large)."
+      "note": "Resumable newest-to-oldest backfill from 2026-01-01 to present, followed by live polling."
     },
     {
       "key": "navi",
@@ -71,9 +71,10 @@
       "key": "deepbook",
       "role": "liquidity-signal",
       "packageEnv": "DEEPBOOK_PACKAGE_ID",
-      "package": "",
+      "package": "0x0e735f8c93a95722efd73521aca7a7652c0bb71ed1daf41b26dfd7d1ff71f748",
+      "external": true,
       "modules": [],
-      "note": "Primary DeepBook liquidity signal comes from the DeepBook v3 indexer REST API (/summary, /orderbook), not on-chain events. On-chain event indexing optional."
+      "note": "DeepBook history is materialized through Mysten's official indexer time-range endpoints."
     }
   ]
 }

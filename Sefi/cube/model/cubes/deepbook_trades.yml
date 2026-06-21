@@ -1,0 +1,73 @@
+cubes:
+  - name: deepbook_trades
+    sql_table: main.deepbook_trades
+    data_source: default
+    joins:
+      - name: deepbook_pools
+        sql: "{CUBE.pool_id} = {deepbook_pools.pool_id}"
+        relationship: many_to_one
+    dimensions:
+      - name: trade_id
+        sql: trade_id
+        type: string
+        primary_key: true
+      - name: pool_id
+        sql: pool_id
+        type: string
+      - name: pool_name
+        sql: pool_name
+        type: string
+      - name: side
+        sql: lower(side)
+        type: string
+      - name: price
+        sql: price
+        type: number
+      - name: trade_base_volume
+        sql: base_volume
+        type: number
+      - name: trade_quote_volume
+        sql: quote_volume
+        type: number
+      - name: maker_balance_manager_id
+        sql: maker_balance_manager_id
+        type: string
+      - name: taker_balance_manager_id
+        sql: taker_balance_manager_id
+        type: string
+      - name: tx_digest
+        sql: tx_digest
+        type: string
+      - name: timestamp
+        sql: timestamp
+        type: time
+    measures:
+      - name: count
+        type: count
+      - name: base_volume
+        sql: base_volume
+        type: sum
+      - name: quote_volume
+        sql: quote_volume
+        type: sum
+      - name: average_price
+        sql: price
+        type: avg
+      - name: min_price
+        sql: price
+        type: min
+      - name: max_price
+        sql: price
+        type: max
+      - name: maker_fees
+        sql: maker_fee
+        type: sum
+      - name: taker_fees
+        sql: taker_fee
+        type: sum
+      - name: unique_makers
+        sql: maker_balance_manager_id
+        type: count_distinct
+      - name: unique_takers
+        sql: taker_balance_manager_id
+        type: count_distinct

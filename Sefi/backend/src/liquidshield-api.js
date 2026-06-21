@@ -22,6 +22,7 @@ import { ScallopReader } from './scallop-reader.js';
 import { ScallopDeriver } from './scallop-deriver.js';
 import { ScallopDiscovery } from './scallop-discovery.js';
 import { ScallopReconciler } from './scallop-reconciler.js';
+import { DeepBookIndexer } from './deepbook-indexer.js';
 import { Alerter } from './alerter.js';
 import { LiquidShieldDeriver } from './liquidshield-deriver.js';
 import { RiskAgent } from './risk-agent.js';
@@ -69,17 +70,32 @@ export async function bootstrapLiquifi({ database, realtimeHub, logger = () => {
   const deriver = new LiquidShieldDeriver({ database, lsConfig, scallopReader, logger });
   const scallopDeriver = new ScallopDeriver({ database, logger });
   const scallopReconciler = new ScallopReconciler({ database, scallopReader, lsConfig, logger });
+  const deepbookIndexer = new DeepBookIndexer({ database, lsConfig, logger });
   const alerter = new Alerter({ cfg: lsConfig, logger });
   const riskAgent = new RiskAgent({ database, lsConfig, deriver, scallopReader, alerter, suiIndexer, realtimeHub, logger });
 
   // Start loops (don't block server startup on a slow first poll).
   suiIndexer.start().catch((e) => logger('warn', 'sui_indexer_start_failed', { error: String(e?.message || e) }));
+  deepbookIndexer
+    .run()
+    .catch((e) => logger('warn', 'deepbook_backfill_failed', { error: String(e?.message || e) }));
   riskAgent.start();
   // Typed Scallop semantic indexing: decode new raw Scallop events into typed tables every cycle.
+  try {
+    scallopDeriver.run();
+  } catch (e) {
+    logger('warn', 'scallop_derive_failed', { error: String(e?.message || e) });
+  }
   const scallopDeriveTimer = setInterval(() => {
     try { scallopDeriver.run(); } catch (e) { logger('warn', 'scallop_derive_failed', { error: String(e?.message || e) }); }
   }, lsConfig.indexPollMs);
   scallopDeriveTimer.unref?.();
+  const deepbookTimer = setInterval(() => {
+    deepbookIndexer
+      .run({ forceRecent: true })
+      .catch((e) => logger('warn', 'deepbook_refresh_failed', { error: String(e?.message || e) }));
+  }, lsConfig.deepbookBackfillIntervalMs);
+  deepbookTimer.unref?.();
   // Live protocol-state reconciliation (#14): SDK reads -> trusted obligation snapshots.
   const reconcileTimer = setInterval(() => {
     scallopReconciler.run().catch((e) => logger('warn', 'reconcile_loop_failed', { error: String(e?.message || e) }));
@@ -89,12 +105,35 @@ export async function bootstrapLiquifi({ database, realtimeHub, logger = () => {
   const readiness = liquifiReadiness(lsConfig);
   logger('info', 'liquifi_bootstrapped', { ready: readiness.ready, missing: readiness.missing });
 
-  return { lsConfig, suiClient, suiIndexer, scallopReader, scallopDiscovery, deriver, scallopDeriver, scallopReconciler, alerter, riskAgent, database, realtimeHub };
+  return {
+    lsConfig,
+    suiClient,
+    suiIndexer,
+    scallopReader,
+    scallopDiscovery,
+    deriver,
+    scallopDeriver,
+    scallopReconciler,
+    deepbookIndexer,
+    alerter,
+    riskAgent,
+    database,
+    realtimeHub,
+  };
 }
 
 /** Mount the frontend-facing /api/* routes. */
 export function registerLiquidShieldRoutes(app, ctx) {
-  const { database, lsConfig, suiIndexer, riskAgent, realtimeHub, scallopDiscovery } = ctx;
+  const {
+    database,
+    lsConfig,
+    suiIndexer,
+    riskAgent,
+    realtimeHub,
+    scallopDiscovery,
+    scallopDeriver,
+    deepbookIndexer,
+  } = ctx;
 
   // ── GET /api/system/health — ops monitoring (#21) ──
   app.get('/api/system/health', asyncRoute(async (_req, res) => {
@@ -132,7 +171,7 @@ export function registerLiquidShieldRoutes(app, ctx) {
       last_liquidshield_event_at: lastLsEventAt,
       oracle_age_ms: oracleAgeMs,
       oracle_stale: Number.isFinite(oracleAgeMs) && oracleAgeMs > lsConfig.maxSnapshotAgeMs,
-      deepbook_ok: market?.liquidity_score != null,
+      deepbook_ok: !deepbookIndexer.getStatus().last_error,
       agent_ok: agent.running,
       scallop_read_failures: agent.scallop_read_failures,
       disabled_positions: agent.disabled_positions,
@@ -141,6 +180,21 @@ export function registerLiquidShieldRoutes(app, ctx) {
       last_scallop_event_at: lastScallop,
       events_total: idx.events_total,
     });
+  }));
+
+  app.get('/api/protocol-index/status', asyncRoute(async (_req, res) => {
+    res.json({
+      window_days: lsConfig.protocolHistoryDays,
+      scallop: suiIndexer.getStatus(),
+      deepbook: deepbookIndexer.getStatus(),
+    });
+  }));
+
+  app.post('/api/protocol-index/sync', asyncRoute(async (_req, res) => {
+    const deepbook = await deepbookIndexer.run({ forceRecent: true });
+    const scallop = await suiIndexer.pollOnce();
+    const derived = scallopDeriver.run();
+    res.json({ deepbook, scallop_events: scallop, scallop_derived: derived });
   }));
 
   // ── GET /api/scallop/positions?owner=0x… — wallet-based obligation discovery (#1) ──
@@ -208,6 +262,7 @@ export function registerLiquidShieldRoutes(app, ctx) {
       recent_actions: database.queryAll(`SELECT * FROM risk_actions ORDER BY timestamp DESC LIMIT 20`),
       market_snapshot: latestMarket(),
       indexer: suiIndexer.getStatus(),
+      deepbook_indexer: deepbookIndexer.getStatus(),
       agent: riskAgent.getStatus(),
       readiness, // { ready, missing[] } — demo-readiness at a glance
     });

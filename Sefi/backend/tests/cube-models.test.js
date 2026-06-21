@@ -84,6 +84,24 @@ test('curated cube models expose corrected SeFi semantics', () => {
   assert.match(htsTransfers, /- name: is_approval\s+sql: is_approval/s);
   assert.match(contractLogs, /- name: timestamp[\s\S]*type: time/);
   assert.doesNotMatch(contractLogs, /- name: block_number[\s\S]*type: sum/);
+  assert.match(contractLogs, /instr\(timestamp, 'T'\) > 0 THEN datetime\(timestamp\)/);
+});
+
+test('Scallop and DeepBook protocol intelligence cubes bind typed history tables', () => {
+  const expected = [
+    ['scallop_collateral_deposits.yml', 'scallop_collateral_deposits', 'main.scallop_collateral_deposit_events'],
+    ['scallop_collateral_withdrawals.yml', 'scallop_collateral_withdrawals', 'main.scallop_collateral_withdraw_events'],
+    ['deepbook_pools.yml', 'deepbook_pools', 'main.deepbook_pools'],
+    ['deepbook_daily_volume.yml', 'deepbook_daily_volume', 'main.deepbook_daily_volume'],
+    ['deepbook_trades.yml', 'deepbook_trades', 'main.deepbook_trades'],
+    ['deepbook_order_updates.yml', 'deepbook_order_updates', 'main.deepbook_order_updates'],
+  ];
+  for (const [fileName, cubeName, sqlTable] of expected) {
+    const cube = parseSingleCubeModel(fileName);
+    assert.equal(cube.name, cubeName);
+    assert.equal(cube.sql_table, sqlTable);
+    assert.equal((cube.measures || []).some((measure) => measure.name === 'count'), true);
+  }
 });
 
 test('CLMM and vault curated cube models are defined with expected table bindings', () => {

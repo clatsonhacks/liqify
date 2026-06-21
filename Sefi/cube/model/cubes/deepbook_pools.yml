@@ -1,0 +1,34 @@
+cubes:
+  - name: deepbook_pools
+    sql_table: main.deepbook_pools
+    data_source: default
+    joins: []
+    dimensions:
+      - name: pool_id
+        sql: pool_id
+        type: string
+        primary_key: true
+      - name: pool_name
+        sql: pool_name
+        type: string
+      - name: base_asset_symbol
+        sql: base_asset_symbol
+        type: string
+      - name: quote_asset_symbol
+        sql: quote_asset_symbol
+        type: string
+      - name: min_size
+        sql: CAST(min_size AS REAL)
+        type: number
+      - name: lot_size
+        sql: CAST(lot_size AS REAL)
+        type: number
+      - name: tick_size
+        sql: CAST(tick_size AS REAL)
+        type: number
+      - name: indexed_at
+        sql: indexed_at
+        type: time
+    measures:
+      - name: count
+        type: count

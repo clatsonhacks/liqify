@@ -1,0 +1,64 @@
+cubes:
+  - name: deepbook_order_updates
+    sql_table: main.deepbook_order_updates
+    data_source: default
+    joins:
+      - name: deepbook_pools
+        sql: "{CUBE.pool_id} = {deepbook_pools.pool_id}"
+        relationship: many_to_one
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+      - name: order_id
+        sql: order_id
+        type: string
+      - name: pool_id
+        sql: pool_id
+        type: string
+      - name: pool_name
+        sql: pool_name
+        type: string
+      - name: balance_manager_id
+        sql: balance_manager_id
+        type: string
+      - name: side
+        sql: lower(side)
+        type: string
+      - name: status
+        sql: lower(status)
+        type: string
+      - name: price
+        sql: price
+        type: number
+      - name: original_quantity_value
+        sql: original_quantity
+        type: number
+      - name: remaining_quantity_value
+        sql: remaining_quantity
+        type: number
+      - name: filled_quantity_value
+        sql: filled_quantity
+        type: number
+      - name: timestamp
+        sql: timestamp
+        type: time
+    measures:
+      - name: count
+        type: count
+      - name: unique_orders
+        sql: order_id
+        type: count_distinct
+      - name: original_quantity
+        sql: original_quantity
+        type: sum
+      - name: filled_quantity
+        sql: filled_quantity
+        type: sum
+      - name: remaining_quantity
+        sql: remaining_quantity
+        type: sum
+      - name: average_price
+        sql: price
+        type: avg

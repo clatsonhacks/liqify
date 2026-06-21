@@ -517,7 +517,7 @@ async function main() {
     });
   });
 
-  app.use('/api/v1', (req, res, next) => {
+  app.use('/api', (req, res, next) => {
     const origin = req.headers.origin ? String(req.headers.origin) : '';
     const allowAllOrigins = config.allowedOrigins.includes('*');
     const allowCredentials = Boolean(config.apiToken || config.demoMode);
@@ -567,6 +567,7 @@ async function main() {
     '/modeling/sqlite/query',
     '/agents/playground/ask',
     '/agents/playground/execute',
+    '/agents/protocol-chat',
     '/agents/frontend/bootstrap',
     '/agents/chat/completions',
     '/agents/chat/sessions',
@@ -780,7 +781,13 @@ async function main() {
       return;
     }
 
-    if (req.path === '/health' || req.path === '/auth/state' || req.path === '/auth/session' || req.path === '/auth/logout') {
+    if (
+      req.path === '/health' ||
+      req.path === '/auth/state' ||
+      req.path === '/auth/session' ||
+      req.path === '/auth/logout' ||
+      req.path === '/agents/protocol-chat'
+    ) {
       next();
       return;
     }
@@ -2493,6 +2500,16 @@ async function main() {
   app.post('/api/v1/agents/chat/completions', route(async (req, res) => {
     const body = ensureRequestBodyObject(req);
     const result = await frontendAgentPlatform.runStatelessCompletion(body);
+    res.json(result);
+  }));
+
+  app.post('/api/v1/agents/protocol-chat', route(async (req, res) => {
+    const body = ensureRequestBodyObject(req);
+    if (typeof body.question !== 'string' || body.question.trim() === '') {
+      sendError(res, req, 400, 'INVALID_QUESTION', 'question is required');
+      return;
+    }
+    const result = await agentService.askProtocol(body.question);
     res.json(result);
   }));
 

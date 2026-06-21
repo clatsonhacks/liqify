@@ -52,6 +52,13 @@ function str(value, fallback = '') {
   return v || fallback;
 }
 
+function parseIsoDate(value, fallback = '') {
+  const text = String(value ?? '').trim();
+  if (!text) return fallback;
+  const parsed = new Date(text);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : fallback;
+}
+
 /**
  * Build the liquifi config object from the given env (defaults to process.env,
  * merged with Sefi/.env when reading the real process env).
@@ -106,8 +113,16 @@ export function createLiquifiConfig(runtimeEnv = process.env) {
     // ── Market data (real sources) ──────────────────────────────────────────────
     pythHermesUrl: str(env.PYTH_HERMES_URL, 'https://hermes.pyth.network'),
     pythPriceFeedId: str(env.PYTH_PRICE_FEED_ID),
-    deepbookIndexerUrl: str(env.DEEPBOOK_INDEXER_URL, 'https://deepbook-indexer.testnet.mystenlabs.com'),
+    deepbookIndexerUrl: str(env.DEEPBOOK_INDEXER_URL, 'https://deepbook-indexer.mainnet.mystenlabs.com'),
     deepbookPoolName: str(env.DEEPBOOK_POOL_NAME, 'SUI_DBUSDC'),
+    protocolHistoryDays: parsePositiveInt(env.SEFI_PROTOCOL_HISTORY_DAYS, 30, 1, 365),
+    protocolHistoryStartDate: parseIsoDate(env.SEFI_PROTOCOL_HISTORY_START_DATE),
+    deepbookBackfillIntervalMs: parsePositiveInt(env.DEEPBOOK_BACKFILL_INTERVAL_MS, 300000, 10000, 86400000),
+    deepbookDetailBackfillEnabled: str(env.DEEPBOOK_DETAIL_BACKFILL_ENABLED, 'false') === 'true',
+    deepbookRequestTimeoutMs: parsePositiveInt(env.DEEPBOOK_REQUEST_TIMEOUT_MS, 30000, 5000, 180000),
+    deepbookDetailWindowMs: parsePositiveInt(env.DEEPBOOK_DETAIL_WINDOW_MS, 24 * 60 * 60 * 1000, 5 * 60 * 1000, 7 * 24 * 60 * 60 * 1000),
+    deepbookMaxStorageBytes: parsePositiveInt(env.DEEPBOOK_MAX_STORAGE_BYTES, 10 * 1024 * 1024 * 1024, 1024 * 1024, Number.MAX_SAFE_INTEGER),
+    deepbookSnapshotEveryWindows: parsePositiveInt(env.DEEPBOOK_SNAPSHOT_EVERY_WINDOWS, 25, 1, 1000),
 
     // ── Risk agent loop ─────────────────────────────────────────────────────────
     agentTickMs: parsePositiveInt(env.SEFI_AGENT_TICK_MS, 20000, 2000, 600000),
