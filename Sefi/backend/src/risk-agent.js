@@ -179,6 +179,14 @@ export class RiskAgent {
     const agentAddr = kp.getPublicKey().toSuiAddress();
     const tx = params.actionType === 1 ? buildScallopTopupPTB(params) : buildScallopRepayPTB(params);
     tx.setSender(agentAddr);
+    // Set an explicit gas budget so tx.build() does NOT trigger the SDK's automatic
+    // budget estimation (which runs its own dry-run and, when the rescue Move call
+    // aborts, throws an opaque "could not automatically determine a budget:
+    // MoveAbort(...)" that masks the real on-chain error). With a fixed budget the
+    // abort flows through dryRunTransactionBlock below and surfaces as a clean
+    // "simulation failed: <error>". The real gas spend is still validated against
+    // maxGas from the dry-run effects (see below).
+    tx.setGasBudget(Number(this.lsConfig.maxGas));
     let dry;
     try {
       dry = await this.rpc.dryRunTransactionBlock({ transactionBlock: await tx.build({ client: this.rpc }) });

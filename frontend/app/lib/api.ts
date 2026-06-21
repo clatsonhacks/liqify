@@ -273,6 +273,45 @@ export function useSimulateShock() {
   });
 }
 
+export type SimulateRescueStep = {
+  key: string;
+  status: "done" | "failed" | "skipped";
+  [k: string]: unknown;
+};
+
+export type SimulateRescueResult = {
+  ok: boolean;
+  obligation_id: string;
+  position_id: string | null;
+  coin: { ok: boolean; total_mist?: string; coin_objects?: number; merged?: number };
+  status: string;
+  tx_digest: string | null;
+  snapshot_digest: string | null;
+  explorer_url: string | null;
+  risk_before: number | null;
+  risk_after: number | null;
+  action_type: string | null;
+  amount: number | null;
+  result_verified: number | null;
+  reason: string | null;
+  steps: SimulateRescueStep[];
+};
+
+// One-click end-to-end rescue: resolve obligation -> ensure coins -> snapshot ->
+// simulate PTB -> execute (signed by the agent key on the backend) -> return digest.
+export function useSimulateRescue() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body?: { positionId?: string }) =>
+      postJSON<SimulateRescueResult>("/api/simulate-rescue", body ?? {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["risk-scores"] });
+      qc.invalidateQueries({ queryKey: ["actions"] });
+    },
+  });
+}
+
 export function useTriggerAgent() {
   const qc = useQueryClient();
   return useMutation({

@@ -273,6 +273,14 @@
 .sim-select{height:40px;min-width:180px;padding:0 12px;border:1px solid var(--line);border-radius:11px;background:#fff;color:var(--ink)}
 .sim-err{margin-top:10px;font-size:12px;color:var(--red)}
 .sim-ok{margin-top:10px;font-size:12px;color:var(--green)}
+.sim-run{width:100%;height:50px;display:flex;align-items:center;justify-content:center;gap:9px;margin-top:6px;border-radius:26px;font-size:13px;font-weight:600}
+.sim-run:disabled{opacity:.7;cursor:progress}
+.spin{animation:gs-spin .9s linear infinite}
+@keyframes gs-spin{to{transform:rotate(360deg)}}
+.trace-list>div.is-active{background:#eef6ff;color:#195a9a}
+.trace-list>div.is-active>span{background:#d7e9fc;color:#195a9a}
+.trace-list>div.is-failed{background:#fdeeee;color:#b3261e}
+.trace-list>div.is-failed>span{background:#f7d4d1;color:#b3261e}
 
 /* dashboard grids */
 .dash-stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-bottom:20px}

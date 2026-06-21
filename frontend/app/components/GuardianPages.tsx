@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity, AlertTriangle, ArrowRight, Check, CheckCircle2, Coins,
-  Clock3, Database, ExternalLink, FlaskConical, LockKeyhole, Pause, Play,
+  Clock3, Database, ExternalLink, FlaskConical, Loader2, LockKeyhole, Pause, Play,
   Plus, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Sparkles,
   TrendingDown, TrendingUp, WalletCards, X, Zap,
 } from "lucide-react";
@@ -13,7 +13,7 @@ import { useWalletAddress, WalletConnect } from "./WalletConnect";
 import {
   decodeReasonCodes, fmtNum, fmtUsd, riskTone, shortId, timeAgo,
   useActions, useDashboard, useOverride, useRegisterProtection, useRiskScores,
-  useScallopPositions, useSimulateShock, useTriggerAgent,
+  useScallopPositions, useSimulateRescue, useTriggerAgent,
   type Position, type RiskScore, type ScallopObligation,
 } from "../lib/api";
 
@@ -146,53 +146,90 @@ function Field({ label, value }: { label: string; value: string }) { return <lab
 
 // ── Simulate ─────────────────────────────────────────────────────────────────
 
+const RESCUE_STEPS: { key: string; label: string; hint: string }[] = [
+  { key: "resolve_obligation", label: "Resolve obligation", hint: "Locate the registered position" },
+  { key: "ensure_coins", label: "Ensure agent coins", hint: "Check / convert gas coins" },
+  { key: "apply_stress", label: "Apply market stress", hint: "Cross the risk trigger" },
+  { key: "submit_snapshot", label: "Submit fresh snapshot", hint: "On-chain risk attestation" },
+  { key: "simulate_ptb", label: "Simulate rescue PTB", hint: "Dry-run before signing" },
+  { key: "execute_ptb", label: "Execute rescue PTB", hint: "Sign & submit with agent key" },
+];
+
 export function SimulateSection() {
   const { data: dash } = useDashboard();
   const { data: actionsData } = useActions(20);
-  const shock = useSimulateShock();
+  const rescue = useSimulateRescue();
   const trigger = useTriggerAgent();
   const override = useOverride();
   const positions = dash?.positions ?? [];
   const [positionId, setPositionId] = useState<string>("");
   const activeId = positionId || positions[0]?.id || "";
 
+  // Optimistic progress so the user watches the PTB flow advance while the
+  // synchronous request runs; replaced by the real step results on completion.
+  const [progressIdx, setProgressIdx] = useState(0);
+  useEffect(() => {
+    if (!rescue.isPending) return;
+    setProgressIdx(0);
+    const t = setInterval(() => setProgressIdx(i => Math.min(i + 1, RESCUE_STEPS.length - 1)), 1400);
+    return () => clearInterval(t);
+  }, [rescue.isPending]);
+
+  const result = rescue.data;
   const lastAction = actionsData?.actions?.find(a => !activeId || a.position_id === activeId) ?? actionsData?.actions?.[0];
   const latestScore = dash?.risk_scores?.find(s => s.position_id === activeId);
   const riskNow = latestScore?.risk_score ?? null;
-  const executed = lastAction?.status === "executed";
 
-  const trace = [
-    { label: "Risk score calculated", done: riskNow != null },
-    { label: "Policy checked", done: Boolean(lastAction) },
-    { label: "Vault limit checked", done: Boolean(lastAction) },
-    { label: "PTB simulated", done: Boolean(lastAction?.simulation_digest) },
-    { label: "PTB submitted", done: Boolean(lastAction?.tx_digest) },
-    { label: "Scallop state verified", done: lastAction?.result_verified === 1 },
-    { label: "ShieldActivatedEvent indexed", done: executed },
-  ];
+  const txDigest = result?.tx_digest ?? (rescue.isSuccess ? null : lastAction?.tx_digest) ?? null;
+  const explorerUrl = result?.explorer_url ?? (txDigest ? `${SUI_EXPLORER}${txDigest}` : null);
+  const riskBefore = result?.risk_before ?? lastAction?.risk_before ?? riskNow ?? null;
+  const riskAfter = result?.risk_after ?? lastAction?.risk_after ?? null;
+  const executed = Boolean(result?.ok ?? (lastAction?.status === "executed"));
+
+  // Step states: real results when available, else optimistic progress while pending.
+  const stepState = (key: string, i: number): "done" | "failed" | "active" | "pending" => {
+    if (result) {
+      const real = result.steps?.find(s => s.key === key);
+      return real ? (real.status === "failed" ? "failed" : "done") : "pending";
+    }
+    if (rescue.isPending) return i < progressIdx ? "done" : i === progressIdx ? "active" : "pending";
+    return "pending";
+  };
 
   return <GuardianShell current="Simulate" title="Testnet Simulation" description="Demonstrate the complete LiquiFi rescue flow with controlled market stress and no mainnet funds.">
-    <div className="simulation-banner"><FlaskConical size={22}/><div><b>Testnet Simulation Mode</b><span>No real mainnet funds are used.</span></div><Status tone="blue">Sui Testnet</Status></div>
-    <div className="simulate-layout"><SectionCard className="sim-control"><CardTitle title="Simulation controls" sub="Stress a real position and let the Guardian agent react."/>
+    <div className="simulation-banner"><FlaskConical size={22}/><div><b>Testnet Simulation Mode</b><span>No real mainnet funds are used. The agent signs with its own key from the backend.</span></div><Status tone="blue">Sui Testnet</Status></div>
+    <div className="simulate-layout"><SectionCard className="sim-control"><CardTitle title="Simulation controls" sub="One click runs the entire rescue: resolve → coins → snapshot → simulate → execute."/>
       <label className="rule-field" style={{ marginBottom: 12 }}><span>Target position</span>
-        <select value={activeId} onChange={e => setPositionId(e.target.value)} className="sim-select">
-          {positions.length === 0 && <option value="">No positions indexed</option>}
+        <select value={activeId} onChange={e => setPositionId(e.target.value)} className="sim-select" disabled={rescue.isPending}>
+          {positions.length === 0 && <option value="">Auto-resolve from registry</option>}
           {positions.map(p => <option key={p.id} value={p.id}>{shortId(p.obligation_id || p.id)} · {p.risk_level ?? "?"}</option>)}
         </select>
       </label>
-      <div className="sim-actions">
-        <button onClick={() => trigger.mutate()} disabled={trigger.isPending}><RefreshCw size={15}/>{trigger.isPending ? "Ticking…" : "Run Agent Tick"}</button>
-        <button className="gs-primary" disabled={!activeId || shock.isPending} onClick={() => shock.mutate({ positionId: activeId, healthFactor: 0.9 })}><Play size={15}/>{shock.isPending ? "Applying shock…" : "Simulate Market Shock"}</button>
-        <button className={override.isPending ? "is-override" : ""} disabled={override.isPending} onClick={() => override.mutate({ action: "pause" })}><Pause size={15}/>DAO Override (Pause)</button>
+      <button className="gs-primary sim-run" disabled={rescue.isPending} onClick={() => rescue.mutate({ positionId: activeId || undefined })}>
+        {rescue.isPending ? <><Loader2 size={16} className="spin"/>Running rescue…</> : <><Play size={16}/>Simulate</>}
+      </button>
+      <div className="sim-actions" style={{ marginTop: 12 }}>
+        <button onClick={() => trigger.mutate()} disabled={trigger.isPending || rescue.isPending}><RefreshCw size={15}/>{trigger.isPending ? "Ticking…" : "Run Agent Tick"}</button>
+        <button className={override.isPending ? "is-override" : ""} disabled={override.isPending || rescue.isPending} onClick={() => override.mutate({ action: "pause" })}><Pause size={15}/>DAO Override (Pause)</button>
       </div>
-      {shock.isError && <p className="sim-err">{String(shock.error?.message)}</p>}
-      {override.isError && <p className="sim-err">{String(override.error?.message)}</p>}
+      {rescue.isError && <p className="sim-err">{String(rescue.error?.message)}</p>}
+      {result && !result.ok && <p className="sim-err">Rescue blocked: {result.reason ?? "see trace"}</p>}
+      {result?.coin && <p className="sim-ok">Agent coins: {((Number(result.coin.total_mist ?? 0)) / 1e9).toFixed(3)} SUI{result.coin.merged ? ` · merged ${result.coin.merged} coins` : ""}</p>}
       {override.data && <p className="sim-ok">Override {override.data.action} → {override.data.status} ({shortId(override.data.digest)})</p>}
     </SectionCard>
-      <div className="sim-right"><SectionCard className="wow-card"><CardTitle title="Risk after the shock" sub="The agent scores and rescues automatically."/><div className="shock-chart">
-        <div><span>Before rescue</span><div className="risk-column danger" style={{ height: `${lastAction?.risk_before ?? riskNow ?? 0}%` }}><b>{lastAction?.risk_before ?? riskNow ?? "—"}%</b></div><Status tone="danger">{lastAction?.before_risk_level ?? "At risk"}</Status></div>
-        <div><span>After rescue</span><div className={`risk-column ${executed ? "safe" : "warning"}`} style={{ height: `${lastAction?.risk_after ?? riskNow ?? 0}%` }}><b>{lastAction?.risk_after ?? "—"}%</b></div><Status tone={executed ? "safe" : "warning"}>{executed ? `Saved · ${lastAction?.action_type} ${fmtNum(lastAction?.amount)}` : "Monitoring"}</Status></div>
-      </div></SectionCard><SectionCard className="trace-card"><CardTitle title="Live execution trace" sub="Policy and transaction verification"/><div className="trace-list">{trace.map((t, i) => <div key={t.label} className={t.done ? "is-done" : ""}><span>{t.done ? <Check size={13}/> : i + 1}</span><b>{t.label}</b><small>{t.done ? "Passed" : "Waiting"}</small></div>)}</div><footer><code>PTB Digest: {lastAction?.tx_digest ? shortId(lastAction.tx_digest) : "—"}</code>{lastAction?.tx_digest ? <a href={`${SUI_EXPLORER}${lastAction.tx_digest}`} target="_blank" rel="noreferrer">View on Sui Explorer <ExternalLink size={13}/></a> : <button disabled>View on Sui Explorer <ExternalLink size={13}/></button>}</footer></SectionCard></div>
+      <div className="sim-right"><SectionCard className="wow-card"><CardTitle title="Risk after the rescue" sub="The agent scores and rescues automatically."/><div className="shock-chart">
+        <div><span>Before rescue</span><div className="risk-column danger" style={{ height: `${riskBefore ?? 0}%` }}><b>{riskBefore ?? "—"}%</b></div><Status tone="danger">At risk</Status></div>
+        <div><span>After rescue</span><div className={`risk-column ${executed ? "safe" : "warning"}`} style={{ height: `${riskAfter ?? 0}%` }}><b>{riskAfter ?? "—"}%</b></div><Status tone={executed ? "safe" : "warning"}>{executed ? `Saved · ${result?.action_type ?? lastAction?.action_type ?? "repay"} ${fmtNum(result?.amount ?? lastAction?.amount)}` : rescue.isPending ? "Working…" : "Monitoring"}</Status></div>
+      </div></SectionCard>
+      <SectionCard className="trace-card"><CardTitle title="Live execution trace" sub="Each step of the autonomous PTB rescue"/>
+        <div className="trace-list">{RESCUE_STEPS.map((s, i) => { const st = stepState(s.key, i); return (
+          <div key={s.key} className={st === "done" ? "is-done" : st === "failed" ? "is-failed" : st === "active" ? "is-active" : ""}>
+            <span>{st === "done" ? <Check size={13}/> : st === "failed" ? <X size={13}/> : st === "active" ? <Loader2 size={13} className="spin"/> : i + 1}</span>
+            <b>{s.label}</b><small>{st === "done" ? "Passed" : st === "failed" ? "Failed" : st === "active" ? "Running…" : s.hint}</small>
+          </div>); })}
+        </div>
+        <footer><code>PTB Digest: {txDigest ? shortId(txDigest) : rescue.isPending ? "pending…" : "—"}</code>{explorerUrl ? <a href={explorerUrl} target="_blank" rel="noreferrer">View on Sui Explorer <ExternalLink size={13}/></a> : <button disabled>View on Sui Explorer <ExternalLink size={13}/></button>}</footer>
+      </SectionCard></div>
     </div></GuardianShell>;
 }
 

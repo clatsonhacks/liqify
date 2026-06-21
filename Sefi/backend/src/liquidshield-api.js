@@ -304,6 +304,120 @@ export function registerLiquidShieldRoutes(app, ctx) {
     res.json({ applied: { position_id: positionId, ...stress }, tick: summary, latest_score: score });
   }));
 
+  // ── POST /api/simulate-rescue ─────────────────────────────────────────────────
+  // ONE-CLICK end-to-end rescue for the Simulate page. Runs the whole flow and
+  // returns a step trace + the final PTB transaction:
+  //   1. resolve the obligation/position (sync+derive from the registry if needed)
+  //   2. ensure the agent has spendable coins for gas (merge fragments if any)
+  //   3. apply stress to cross the trigger, then run the agent tick, which submits a
+  //      fresh snapshot, simulates the PTB, and executes it — signed by AGENT_PRIVATE_KEY.
+  app.post('/api/simulate-rescue', asyncRoute(async (req, res) => {
+    const body = req.body || {};
+    const steps = [];
+    const step = (key, status, detail = {}) => { steps.push({ key, status, ...detail }); };
+    const rpc = new SuiRpcClient({ url: lsConfig.suiRpcUrl });
+
+    // 1) Resolve target position + obligation. Sync+derive from the registry if the
+    //    positions table is empty (handles a fresh backend or a just-registered position).
+    let positions = database.queryAll(
+      `SELECT * FROM positions WHERE status NOT IN ('revoked') ORDER BY last_updated DESC`
+    );
+    if (positions.length === 0) {
+      try { await suiIndexer.pollOnce(); } catch { /* best-effort */ }
+      try { await (scallopDeriver?.run?.() ?? riskAgent.deriver?.run?.()); } catch { /* best-effort */ }
+      positions = database.queryAll(
+        `SELECT * FROM positions WHERE status NOT IN ('revoked') ORDER BY last_updated DESC`
+      );
+    }
+    const wantId = body.positionId || req.query.positionId;
+    const position = wantId
+      ? positions.find((p) => p.id === wantId || p.obligation_id === wantId)
+      : positions[0];
+    const obligationId = position?.obligation_id || lsConfig.obligationId;
+    if (!obligationId) {
+      return res.status(400).json({
+        error: { code: 'NO_OBLIGATION', message: 'No obligation could be resolved. Set OBLIGATION_ID or register a position.' },
+        steps,
+      });
+    }
+    step('resolve_obligation', 'done', { position_id: position?.id || obligationId, obligation_id: obligationId });
+
+    // 2) Ensure the agent has coins for gas; merge fragmented SUI into one coin so a
+    //    clean gas/payment coin is always available ("convert" coins if needed).
+    const agent = lsConfig.agentAddress;
+    let coin = { ok: false };
+    try {
+      const bal = await rpc.getBalance({ owner: agent, coinType: '0x2::sui::SUI' });
+      const total = BigInt(bal.totalBalance || '0');
+      const GAS_FLOOR = 20_000_000n; // ~0.02 SUI
+      coin = { ok: total >= GAS_FLOOR, total_mist: total.toString(), coin_objects: bal.coinObjectCount };
+      if (!coin.ok) {
+        step('ensure_coins', 'failed', { ...coin, message: 'Agent SUI below gas floor — fund it on testnet.' });
+        return res.status(400).json({
+          error: { code: 'AGENT_UNFUNDED', message: `Agent ${agent} has ${total} MIST (< 0.02 SUI). Fund it via the testnet faucet.`, agent },
+          steps,
+        });
+      }
+      // Merge fragmented coins into the primary (best-effort; gas still works without it).
+      if (bal.coinObjectCount > 1) {
+        try {
+          const { data: coins } = await rpc.getCoins({ owner: agent, coinType: '0x2::sui::SUI' });
+          if (coins.length > 1) {
+            const kp = Ed25519Keypair.fromSecretKey(Buffer.from(lsConfig.agentPrivateKey, 'base64'));
+            const tx = new Transaction();
+            tx.setSender(agent);
+            const [primary, ...rest] = coins.map((c) => tx.object(c.coinObjectId));
+            tx.mergeCoins(primary, rest);
+            await rpc.signAndExecuteTransaction({ signer: kp, transaction: tx, options: { showEffects: true } });
+            coin.merged = coins.length;
+          }
+        } catch (e) { coin.merge_skipped = String(e?.message || e); }
+      }
+      step('ensure_coins', 'done', coin);
+    } catch (e) {
+      step('ensure_coins', 'failed', { message: String(e?.message || e) });
+      return res.status(502).json({ error: { code: 'COIN_CHECK_FAILED', message: String(e?.message || e) }, steps });
+    }
+
+    // 3) Apply stress + run the full agent flow (snapshot -> simulate -> execute).
+    if (position) riskAgent.setStress(position.id, { healthFactor: 0.9 });
+    step('apply_stress', 'done', { health_factor: 0.9 });
+    realtimeHub?.publish('index', 'simulate_rescue_started', { obligation_id: obligationId });
+
+    const tick = await riskAgent.triggerOnce();
+
+    // 4) Read the resulting action and build the trace.
+    const action =
+      database.queryOne(
+        `SELECT * FROM risk_actions WHERE position_id = ? ORDER BY timestamp DESC LIMIT 1`,
+        [position?.id || obligationId]
+      ) || database.queryOne(`SELECT * FROM risk_actions ORDER BY timestamp DESC LIMIT 1`);
+
+    const executed = Boolean(action?.tx_digest);
+    step('submit_snapshot', action?.simulation_digest ? 'done' : 'skipped', { digest: action?.simulation_digest || null });
+    step('simulate_ptb', action && action.status !== 'blocked' ? 'done' : 'failed', { reason: action?.reason || null });
+    step('execute_ptb', executed ? 'done' : 'failed', { digest: action?.tx_digest || null, reason: executed ? null : action?.reason || null });
+
+    res.json({
+      ok: executed,
+      obligation_id: obligationId,
+      position_id: position?.id || null,
+      coin,
+      status: action?.status || 'blocked',
+      tx_digest: action?.tx_digest || null,
+      snapshot_digest: action?.simulation_digest || null,
+      explorer_url: action?.tx_digest ? `https://suiscan.xyz/testnet/tx/${action.tx_digest}` : null,
+      risk_before: action?.risk_before ?? null,
+      risk_after: action?.risk_after ?? null,
+      action_type: action?.action_type || null,
+      amount: action?.amount ?? null,
+      result_verified: action?.result_verified ?? null,
+      reason: action?.reason || null,
+      steps,
+      tick,
+    });
+  }));
+
   // ── POST /api/trigger-agent ───────────────────────────────────────────────────
   app.post('/api/trigger-agent', asyncRoute(async (_req, res) => {
     const summary = await riskAgent.triggerOnce();
