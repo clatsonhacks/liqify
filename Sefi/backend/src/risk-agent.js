@@ -387,6 +387,7 @@ export class RiskAgent {
       policyId: position.policy_id,
       vaultId: position.vault_id,
       snapshotId: position.snapshot_id,
+      positionId: cfg.positionId || position.id, // ProtectedPosition object (begin_rescue arg)
       registryId: cfg.shieldRegistryId,          // singleton shared registry
       guardianDelegationId: cfg.guardianDelegationId,
       obligationId: position.obligation_id,

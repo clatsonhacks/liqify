@@ -1,18 +1,56 @@
 /**
  * Scallop rescue PTB builder.
  *
- * Calls the strict scallop_adapter entry functions which own the entire rescue
- * flow internally (validate → withdraw → Scallop → emit event). No Coin<T>
- * is ever returned to the PTB caller.
+ * Matches the DEPLOYED LiquidShield package (shield_executor::begin_rescue →
+ * Scallop repay/deposit → shield_executor::complete_rescue). begin_rescue returns
+ * a Coin<T> + a RescueReceipt (hot-potato); the PTB routes the coin into Scallop
+ * and hands the leftover + receipt to complete_rescue, which returns funds to the
+ * vault and emits ShieldActivatedEvent. (The newer scallop_adapter design is not
+ * on the deployed testnet package, so this builder targets begin_rescue directly.)
  *
- * Entry functions:
- *   scallop_adapter::execute_scallop_repay<T>  — repay debt
- *   scallop_adapter::execute_scallop_topup<T>  — add collateral
+ * Flow:
+ *   begin_rescue<T> → SplitCoins → repay/deposit_collateral<T> → complete_rescue<T>
  */
 import { SuiClient } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { PACKAGE_ID, SHIELD_REGISTRY_ID, SCALLOP_VERSION_ID, SCALLOP_MARKET_ID, SUI_CLOCK_ID, MAX_SNAPSHOT_AGE_MS, ACTION_REPAY, RPC_URL, } from "./types.js";
+import { PACKAGE_ID, SCALLOP_PACKAGE_ID, SCALLOP_VERSION_ID, SCALLOP_MARKET_ID, SUI_CLOCK_ID, MAX_SNAPSHOT_AGE_MS, ACTION_REPAY, ACTION_TOPUP, RPC_URL, } from "./types.js";
+
+function protocolBytes(protocol) {
+    return Array.from(Buffer.from(String(protocol || "scallop"), "utf8"));
+}
+
+/**
+ * begin_rescue<T> — returns [Coin<T>, RescueReceipt]. Shared object arg order is
+ * taken from the deployed shield_executor::begin_rescue signature.
+ */
+function beginRescue(tx, params) {
+    return tx.moveCall({
+        target: `${PACKAGE_ID}::shield_executor::begin_rescue`,
+        typeArguments: [params.coinType],
+        arguments: [
+            tx.object(params.guardianDelegationId), // GuardianCap (agent-owned)
+            tx.object(params.policyId), // &RiskPolicy (shared)
+            tx.object(params.snapshotId), // &RiskSnapshot (shared)
+            tx.object(params.positionId), // &ProtectedPosition (agent-owned)
+            tx.object(params.vaultId), // &mut ShieldVault<T> (shared)
+            tx.pure.vector("u8", protocolBytes(params.protocol)),
+            tx.pure.address(params.obligationId),
+            tx.pure.u64(params.amount),
+            tx.pure.u64(MAX_SNAPSHOT_AGE_MS),
+            tx.object(SUI_CLOCK_ID),
+        ],
+    });
+}
+
+/** complete_rescue<T> — returns leftover coin to the vault, emits ShieldActivatedEvent. */
+function completeRescue(tx, params, receipt, leftoverCoin, actionType) {
+    tx.moveCall({
+        target: `${PACKAGE_ID}::shield_executor::complete_rescue`,
+        typeArguments: [params.coinType],
+        arguments: [receipt, tx.object(params.vaultId), leftoverCoin, tx.pure.u8(actionType)],
+    });
+}
 // ─── Client / keypair helpers ─────────────────────────────────────────────────
 function buildClient() {
     return new SuiClient({ url: RPC_URL });
@@ -33,52 +71,43 @@ function agentKeypair() {
  */
 export function buildScallopRepayPTB(params) {
     const tx = new Transaction();
+    const [coin, receipt] = beginRescue(tx, params);
+    // Split the exact rescue amount and repay it into the Scallop obligation.
+    const [repayCoin] = tx.splitCoins(coin, [tx.pure.u64(params.amount)]);
     tx.moveCall({
-        target: `${PACKAGE_ID}::scallop_adapter::execute_scallop_repay`,
+        target: `${SCALLOP_PACKAGE_ID}::repay::repay`,
         typeArguments: [params.coinType],
         arguments: [
-            tx.object(params.guardianDelegationId), // &GuardianDelegation (shared)
-            tx.object(params.policyId), // &RiskPolicy (shared)
-            tx.object(params.snapshotId), // &RiskSnapshot (shared)
-            tx.object(params.registryId ?? SHIELD_REGISTRY_ID), // &ShieldRegistry (shared singleton)
-            tx.object(params.vaultId), // &mut ShieldVault<T> (shared)
-            tx.object(SCALLOP_VERSION_ID), // &Version (Scallop)
-            tx.object(params.obligationId), // &mut Obligation (Scallop shared)
-            tx.object(SCALLOP_MARKET_ID), // &mut Market (Scallop shared)
-            tx.pure.address(params.obligationId), // obligation_id: address (cross-check)
-            tx.pure.u64(params.amount),
-            tx.pure.u64(MAX_SNAPSHOT_AGE_MS),
-            tx.object(SUI_CLOCK_ID),
+            tx.object(SCALLOP_VERSION_ID), // &Version
+            tx.object(params.obligationId), // &mut Obligation
+            tx.object(SCALLOP_MARKET_ID), // &mut Market
+            repayCoin, // Coin<T>
+            tx.object(SUI_CLOCK_ID), // &Clock
         ],
     });
+    completeRescue(tx, params, receipt, coin, ACTION_REPAY);
     return tx;
 }
 /**
  * Build an atomic Scallop COLLATERAL TOP-UP rescue PTB.
  *
- * Calls scallop_adapter::execute_scallop_topup which handles:
- *   begin_rescue → apply_collateral → complete_rescue
+ * begin_rescue → deposit_collateral → complete_rescue (leftover returns to vault).
  */
 export function buildScallopTopupPTB(params) {
     const tx = new Transaction();
+    const [coin, receipt] = beginRescue(tx, params);
+    const [depositCoin] = tx.splitCoins(coin, [tx.pure.u64(params.amount)]);
     tx.moveCall({
-        target: `${PACKAGE_ID}::scallop_adapter::execute_scallop_topup`,
+        target: `${SCALLOP_PACKAGE_ID}::deposit_collateral::deposit_collateral`,
         typeArguments: [params.coinType],
         arguments: [
-            tx.object(params.guardianDelegationId),
-            tx.object(params.policyId),
-            tx.object(params.snapshotId),
-            tx.object(params.registryId ?? SHIELD_REGISTRY_ID),
-            tx.object(params.vaultId),
-            tx.object(SCALLOP_VERSION_ID),
-            tx.object(params.obligationId),
-            tx.object(SCALLOP_MARKET_ID),
-            tx.pure.address(params.obligationId),
-            tx.pure.u64(params.amount),
-            tx.pure.u64(MAX_SNAPSHOT_AGE_MS),
-            tx.object(SUI_CLOCK_ID),
+            tx.object(SCALLOP_VERSION_ID), // &Version
+            tx.object(params.obligationId), // &mut Obligation
+            tx.object(SCALLOP_MARKET_ID), // &mut Market
+            depositCoin, // Coin<T>
         ],
     });
+    completeRescue(tx, params, receipt, coin, ACTION_TOPUP);
     return tx;
 }
 // ─── Simulation ───────────────────────────────────────────────────────────────
@@ -140,7 +169,7 @@ if (process.argv[1]?.endsWith("scallop_rescue.ts") ||
         policyId: process.env.RISK_POLICY_ID ?? "",
         vaultId: process.env.VAULT_ID ?? "",
         snapshotId: process.env.SNAPSHOT_ID ?? "",
-        registryId: process.env.SHIELD_REGISTRY_ID ?? SHIELD_REGISTRY_ID,
+        positionId: process.env.POSITION_ID ?? "",
         guardianDelegationId: process.env.GUARDIAN_DELEGATION_ID ?? "",
         obligationId: process.env.OBLIGATION_ID ?? "",
         protocol: process.env.PROTOCOL ?? "scallop",

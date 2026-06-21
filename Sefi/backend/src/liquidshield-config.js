@@ -83,6 +83,7 @@ export function createLiquifiConfig(runtimeEnv = process.env) {
     riskPolicyId: str(env.RISK_POLICY_ID),
     vaultId: str(env.VAULT_ID),
     snapshotId: str(env.SNAPSHOT_ID),
+    positionId: str(env.POSITION_ID),
     guardianDelegationId: str(env.GUARDIAN_DELEGATION_ID),
     obligationId: str(env.OBLIGATION_ID),
     protocol: str(env.PROTOCOL, 'scallop'),

@@ -74,8 +74,9 @@ export interface RescueParams {
   policyId:             string;
   vaultId:              string;
   snapshotId:           string;
-  registryId:           string; // ShieldRegistry shared object (singleton)
-  guardianDelegationId: string; // GuardianDelegation shared object (replaces old GuardianCap)
+  positionId?:          string; // ProtectedPosition object (begin_rescue arg, deployed flow)
+  registryId?:          string; // ShieldRegistry shared object (singleton) — adapter flow only
+  guardianDelegationId: string; // agent GuardianCap / GuardianDelegation object
   obligationId:         string;
   protocol:             string;
   /** Amount in base coin units */

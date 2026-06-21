@@ -8,6 +8,13 @@ contracts/build/
 ptb/.env
 *.key
 *.keystore
+# Never commit any .env (contains API keys / private keys)
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 
 # Claude session files
 .claude/
@@ -15,3 +22,14 @@ ptb/.env
 # OS
 .DS_Store
 Thumbs.db
+
+# Next.js build artifacts
+.next/
+**/.next/
+
+# Frontend (Next.js)
+frontend/node_modules/
+frontend/.next/
+frontend/next-env.d.ts
+frontend/tsconfig.tsbuildinfo
+frontend/.claude/
