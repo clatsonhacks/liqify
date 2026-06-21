@@ -322,3 +322,7 @@
 .gs-topbar-actions{display:flex;align-items:center;gap:12px}
 .gs-wallet-pill{display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 18px;border:1px solid #afd0fa;border-radius:23px;background:#fff;color:var(--blue);font-weight:600;cursor:pointer;transition:background .15s,border-color .15s}
 .gs-wallet-pill:hover{background:#f4f9ff;border-color:#7fb4f6}
+
+/* ── Fix: Guardian Status card overlapping sidebar nav in fullscreen ─────── */
+.gs-sidebar{display:flex;flex-direction:column}
+.gs-sidebar .gs-download-card{position:relative;left:auto;right:auto;bottom:auto;margin-top:auto}
