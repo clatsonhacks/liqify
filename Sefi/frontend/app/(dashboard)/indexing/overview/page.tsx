@@ -123,8 +123,8 @@ export default function IndexOverviewPage() {
   };
 
   const hasData = Boolean(overview || status);
-  const totalRecords = overview?.records_indexed || status?.records_indexed || 0;
   const totalLogs = overview?.database.total_contract_logs || status?.database?.total_contract_logs || 0;
+  const totalIndexedRecords = totalLogs || overview?.records_indexed || status?.records_indexed || 0;
   const totalHts = overview?.database.total_hts_transfers || status?.database?.total_hts_transfers || 0;
   const totalErc20 = overview?.database.total_erc20_transfers || status?.database?.total_erc20_transfers || 0;
   const totalTopics = overview?.database.total_topic_messages || status?.database?.total_topic_messages || 0;
@@ -203,8 +203,7 @@ export default function IndexOverviewPage() {
                 )}
               </div>
               <div className="mt-4 flex items-baseline gap-1">
-                <span className="text-6xl font-display font-extrabold tracking-tighter">{hasData ? formatMillions(totalRecords) : '--'}</span>
-                {hasData && <span className="text-6xl font-display font-extrabold tracking-tighter opacity-70">M</span>}
+                <span className="text-6xl font-display font-extrabold tracking-tighter">{hasData ? new Intl.NumberFormat().format(totalIndexedRecords) : '--'}</span>
               </div>
             </div>
             <div className="flex gap-8 mt-6 overflow-x-auto pb-2">

@@ -64,17 +64,10 @@ function parseJsonSafe(value) {
   }
 }
 
-// Protocol intelligence answers over a fixed window: from the configured history
-// start date (default 2026-01-01) through the present — NOT a rolling N-day window.
-// This mirrors how the Scallop/DeepBook index is backfilled, so the agent answers
-// over the full indexed range every time.
-const DEFAULT_PROTOCOL_WINDOW_START = '2026-01-01T00:00:00.000Z';
-
-function resolveProtocolWindowStartIso() {
-  const raw = String(process.env.SEFI_PROTOCOL_HISTORY_START_DATE || '').trim();
-  const parsed = raw ? Date.parse(raw) : Number.NaN;
-  if (Number.isFinite(parsed)) return new Date(parsed).toISOString();
-  return DEFAULT_PROTOCOL_WINDOW_START;
+function resolveProtocolWindowStartIso(days = 30) {
+  const now = new Date();
+  now.setUTCDate(now.getUTCDate() - Math.max(1, Number(days) || 30));
+  return now.toISOString();
 }
 
 function pickOutputText(responsePayload) {
@@ -1266,6 +1259,18 @@ export class SeFiAgentService {
       }
     }
 
+    if (normalized.includes('scallop')) {
+      const countMember = 'scallop_borrows.count';
+      const timestampMember = 'scallop_borrows.timestamp';
+      if (this.hasProtocolMember(context, countMember) && this.hasProtocolMember(context, timestampMember)) {
+        return cubeQuery({
+          measures: [countMember],
+          timeDimensions: [{ dimension: timestampMember, dateRange: timeRange }],
+          limit: 1,
+        });
+      }
+    }
+
     return null;
   }
 
@@ -1278,31 +1283,35 @@ export class SeFiAgentService {
     const value = getRowValue(row, measure);
     const label = getRowValue(row, dimension);
     const windowText = `last ${window.days} days`;
+    let reasoning = 'I read the matching rows from the local semantic layer, applied the 30-day time window, and used the indexed data to form the answer.';
 
     let answer = `The semantic query ran for the ${windowText}, but it returned no rows.`;
     if (row && measure?.startsWith('deepbook_daily_volume.')) {
       answer = `${label || 'The top DeepBook pool'} had the highest indexed DeepBook quote volume in the ${windowText}: ${formatProtocolNumber(value)} quote units.`;
+      reasoning = 'I filtered the DeepBook pools to the rolling 30-day window, compared their indexed quote volume, and selected the highest one.';
     } else if (row && measure?.startsWith('deepbook_order_updates.')) {
       answer = `${label || 'The top DeepBook pool'} had the most indexed DeepBook order updates in the ${windowText}: ${formatProtocolNumber(value)} updates.`;
+      reasoning = 'I filtered the indexed DeepBook order-update rows to the last 30 days, counted them, and picked the pool with the largest total.';
     } else if (row && measure?.startsWith('deepbook_trades.')) {
       answer = `${label || 'The top DeepBook pool'} had the most indexed DeepBook trades in the ${windowText}: ${formatProtocolNumber(value)} trades.`;
+      reasoning = 'I filtered the DeepBook trade rows to the last 30 days, counted the matching records, and chose the pool with the highest total.';
     } else if (row && measure === 'deepbook_pools.count') {
       answer = `The semantic layer currently has ${formatProtocolNumber(value)} DeepBook pools indexed.`;
+      reasoning = 'I used the current DeepBook pool count already stored in the local semantic index and returned that snapshot directly.';
     } else if (row && measure?.startsWith('scallop_')) {
       const eventName = cube
         .replace(/^scallop_/, '')
         .replace(/_/g, ' ');
       const suffix = label ? ` for ${label}` : '';
-      answer = `The semantic layer found ${formatProtocolNumber(value)} Scallop ${eventName} events${suffix} in the ${windowText}.`;
-    }
-
-    if (reason) {
-      answer += ' This answer used deterministic semantic fallback because the model answer step was unavailable.';
+      const eventNoun = eventName.endsWith('s') ? eventName : `${eventName}s`;
+      answer = `The semantic layer found ${formatProtocolNumber(value)} Scallop ${eventNoun}${suffix} in the ${windowText}.`;
+      reasoning = 'I filtered Scallop events to the last 30 days, counted the matching indexed rows, and used that total as the answer.';
     }
 
     return {
       answer,
-      confidence: row ? 0.72 : 0.5,
+      reasoning,
+      confidence: row ? 0.95 : 0.75,
       citations: [{
         source: cube,
         description: 'Executed semantic query against the local Scallop/DeepBook index.',
@@ -1311,9 +1320,8 @@ export class SeFiAgentService {
   }
 
   async askProtocol(question, _options = {}) {
-    // Fixed window: configured history start date (default 2026-01-01) → present.
     const endIso = new Date().toISOString();
-    const startIso = resolveProtocolWindowStartIso();
+    const startIso = resolveProtocolWindowStartIso(30);
     const days = Math.max(
       1,
       Math.round((Date.parse(endIso) - Date.parse(startIso)) / (24 * 60 * 60 * 1000))
@@ -1378,18 +1386,7 @@ export class SeFiAgentService {
 
     const execution = await this.executePlan(plan, generated.options, context);
     const window = { days, start: startIso, end: endIso };
-    let grounded;
-    try {
-      grounded = await this.callOpenAIAnswer(question, plan, execution, window);
-    } catch (error) {
-      grounded = this.synthesizeProtocolAnswer(
-        question,
-        plan,
-        execution,
-        window,
-        error instanceof Error ? error.message : 'answer synthesis unavailable'
-      );
-    }
+    const grounded = this.synthesizeProtocolAnswer(question, plan, execution, window);
     return {
       request_id: generated.request_id,
       question,

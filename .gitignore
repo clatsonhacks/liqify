@@ -33,3 +33,9 @@ frontend/.next/
 frontend/next-env.d.ts
 frontend/tsconfig.tsbuildinfo
 frontend/.claude/
+
+# local SQLite (never commit)
+data/
+*.db
+*.db-wal
+*.db-shm

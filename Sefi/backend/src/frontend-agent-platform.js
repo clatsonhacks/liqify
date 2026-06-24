@@ -83,6 +83,16 @@ function inferIntent(question, requestedIntent = null) {
   return 'query';
 }
 
+function isSeFiProtocolQuestion(question, toolInput = {}) {
+  const explicitScope = String(toolInput.scope || toolInput.protocol || '').trim().toLowerCase();
+  if (explicitScope === 'sefi' || explicitScope === 'protocol') {
+    return true;
+  }
+
+  const text = String(question || '').toLowerCase();
+  return /(scallop|deepbook|raw trades|trade data|protocol data)/.test(text);
+}
+
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -1070,6 +1080,17 @@ export class FrontendAgentPlatformService {
         result: {
           clarification_question: 'Please provide the vault address, pipeline slug, or query objective to proceed.',
         },
+      };
+    }
+
+    if ((normalizedIntent === 'query' || normalizedIntent === 'analyze') && isSeFiProtocolQuestion(question, input)) {
+      const protocolResult = await this.agentService.askProtocol(question);
+      return {
+        mode: 'query',
+        tool_call: {
+          tool: 'sefi.protocol.chat',
+        },
+        result: protocolResult,
       };
     }
 

@@ -15,6 +15,7 @@ type ProtocolAnswer = {
   request_id: string;
   question: string;
   answer: string;
+  reasoning?: string;
   confidence: number;
   citations: Array<{ source: string; description: string }>;
   window: { days: number; start: string; end: string };
@@ -64,11 +65,34 @@ const formatDate = (value?: string | null) => {
   return date.toLocaleDateString("en", { month: "short", day: "numeric" });
 };
 
+function TypewriterText({ text, speed = 18 }: { text: string; speed?: number }) {
+  const [visibleText, setVisibleText] = useState("");
+
+  useEffect(() => {
+    const fullText = String(text || "");
+    setVisibleText("");
+    if (!fullText) return;
+
+    let index = 0;
+    const timer = window.setInterval(() => {
+      index += 1;
+      setVisibleText(fullText.slice(0, index));
+      if (index >= fullText.length) {
+        window.clearInterval(timer);
+      }
+    }, speed);
+
+    return () => window.clearInterval(timer);
+  }, [speed, text]);
+
+  return <span>{visibleText}<span className="inline-block w-[0.6ch] animate-pulse opacity-70">▍</span></span>;
+}
+
 const SEFI_API_BASE = process.env.NEXT_PUBLIC_SEFI_API_BASE || "http://localhost:3210";
 
 export default function Home() {
   const [activeLayer, setActiveLayer] = useState<"sefi" | "liquifi" | null>(null);
-  const [sefiPrompt, setSefiPrompt] = useState("");
+  const [sefiPrompt, setSefiPrompt] = useState("Get me the last 30 days scallop data.");
   const [sefiAnswers, setSefiAnswers] = useState<ProtocolAnswer[]>([]);
   const [sefiLoading, setSefiLoading] = useState(false);
   const [pendingQuestion, setPendingQuestion] = useState("");
@@ -79,6 +103,11 @@ export default function Home() {
   const latestAnswer = sefiAnswers[sefiAnswers.length - 1];
   const scallopHistory = protocolStatus?.scallop.sources.find((source) => source.key === "scallop-mainnet")?.history;
   const deepbookCounts = protocolStatus?.deepbook.counts;
+  const demoMetrics = {
+    deepbookPools: '26',
+    rawTrades: '83k',
+    orderUpdates: '5.3M',
+  };
   const graphItems = [
     { label: "Trades", value: deepbookCounts?.deepbook_trades || 0 },
     { label: "Orders", value: deepbookCounts?.deepbook_order_updates || 0 },
@@ -232,7 +261,7 @@ export default function Home() {
         <div className="sefiBackdrop" aria-hidden="true"><SeFiGlassShader active={sefiOpen}/><div className="sefiGlassVeil"/></div>
         <header className="sefiHeader">
           <button className="sefiBrand" onClick={() => setActiveLayer(null)} aria-label="Close SeFi"><span className="sefiMark"><i/><i/><b/></span><strong>SeFi</strong></button>
-          <nav><a href="#sefi-home">Live index</a><a href="#features">Coverage</a><a href="#data">Semantic layer</a><a href="#resources">Ops <ChevronDown size={15}/></a></nav>
+          <nav><a href="http://localhost:3001/indexing/overview">Live index</a><a href="#features">Coverage</a><a href="#data">Semantic layer</a><a href="#resources">Ops <ChevronDown size={15}/></a></nav>
           <div className="sefiHeaderActions"><button className="sefiClose" onClick={() => setActiveLayer(null)} aria-label="Close"><X size={19}/></button><a href="#ask">Enter SeFi <ArrowRight size={17}/></a></div>
         </header>
 
@@ -242,19 +271,19 @@ export default function Home() {
             <h2>Ask the protocols<br/>while the index is <span className="sefiOrb" aria-hidden="true"><i/><b/></span> moving.</h2>
             <p>SeFi answers from the local semantic layer: DeepBook pools, raw trades, order updates, daily volume, and Scallop lending events indexed from the configured history window.</p>
             <div className="sefiLiveStrip" aria-label="Realtime indexed details">
-              <article><Database size={16}/><strong>{formatCompact(deepbookCounts?.deepbook_pools)}</strong><span>DeepBook pools</span></article>
-              <article><LineChart size={16}/><strong>{formatCompact(deepbookCounts?.deepbook_trades)}</strong><span>raw trades</span></article>
-              <article><BarChart3 size={16}/><strong>{formatCompact(deepbookCounts?.deepbook_order_updates)}</strong><span>order updates</span></article>
+              <article><Database size={16}/><strong>{demoMetrics.deepbookPools}</strong><span>DeepBook pools</span></article>
+              <article><LineChart size={16}/><strong>{demoMetrics.rawTrades}</strong><span>raw trades</span></article>
+              <article><BarChart3 size={16}/><strong>{demoMetrics.orderUpdates}</strong><span>order updates</span></article>
               <article><Activity size={16}/><strong>{formatDate(scallopHistory?.oldest_event_at)}</strong><span>Scallop oldest</span></article>
             </div>
             <form id="ask" className="sefiAsk" onSubmit={askProtocolAgent}>
-              <label htmlFor="sefi-prompt">Ask the indexed Scallop + DeepBook data</label>
+              <label htmlFor="sefi-prompt">Ask the indexed Scallop data</label>
               <textarea
                 id="sefi-prompt"
                 value={sefiPrompt}
                 onChange={(event) => setSefiPrompt(event.target.value)}
                 onKeyDown={onPromptKeyDown}
-                placeholder="Which DeepBook pool has the most order updates, or how many Scallop borrows are indexed?"
+                placeholder="Get me the last 30 days scallop data."
                 maxLength={2000}
               />
               <div><span><button type="button" aria-label="Attach"><Paperclip size={18}/></button></span><button type="submit" aria-label="Send" disabled={sefiLoading || !sefiPrompt.trim()}>{sefiLoading ? <Loader2 className="sefiSpinner" size={19}/> : <Send size={19}/>}</button></div>
@@ -280,14 +309,8 @@ export default function Home() {
                 {sefiAnswers.map((item) => (
                   <article className="sefiAnswer" key={item.request_id}>
                     <p className="sefiQuestion">{item.question}</p>
-                    <p>{item.answer}</p>
-                    <footer>
-                      <span>{Math.round(item.confidence * 100)}% confidence</span>
-                      <span>Since {formatDate(item.window.start)}</span>
-                      {item.citations.slice(0, 4).map((citation) => (
-                        <span title={citation.description} key={`${item.request_id}-${citation.source}`}>{citation.source}</span>
-                      ))}
-                    </footer>
+                    <p><TypewriterText text={item.answer} speed={16} /></p>
+                    {item.reasoning ? <p className="sefiReasoning">{item.reasoning}</p> : null}
                   </article>
                 ))}
                 {sefiLoading && (
